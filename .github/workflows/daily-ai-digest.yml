@@ -9,6 +9,7 @@ on:
 jobs:
   digest:
     runs-on: ubuntu-latest
+    environment: PaperDigest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,15 +35,15 @@ jobs:
           DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-          DIGEST_CONFIG: ${{ vars.DIGEST_CONFIG || 'config/domains.json' }}
-          TIMEZONE: ${{ vars.TIMEZONE || 'Asia/Singapore' }}
-          ARXIV_MAX_RESULTS: ${{ vars.ARXIV_MAX_RESULTS || '2000' }}
-          HF_MAX_RESULTS: ${{ vars.HF_MAX_RESULTS || '80' }}
-          HF_MAX_PER_DOMAIN: ${{ vars.HF_MAX_PER_DOMAIN || '100' }}
-          ANALYSIS_MAX_PAPERS: ${{ vars.ANALYSIS_MAX_PAPERS || '40' }}
-          DOMAIN_WORKERS: ${{ vars.DOMAIN_WORKERS || '4' }}
+          DIGEST_CONFIG: ${{ vars.DIGEST_CONFIG || secrets.DIGEST_CONFIG || 'config/domains.json' }}
+          TIMEZONE: ${{ vars.TIMEZONE || secrets.TIMEZONE || 'Asia/Singapore' }}
+          ARXIV_MAX_RESULTS: ${{ vars.ARXIV_MAX_RESULTS || secrets.ARXIV_MAX_RESULTS || '2000' }}
+          HF_MAX_RESULTS: ${{ vars.HF_MAX_RESULTS || secrets.HF_MAX_RESULTS || '80' }}
+          HF_MAX_PER_DOMAIN: ${{ vars.HF_MAX_PER_DOMAIN || secrets.HF_MAX_PER_DOMAIN || '100' }}
+          ANALYSIS_MAX_PAPERS: ${{ vars.ANALYSIS_MAX_PAPERS || secrets.ANALYSIS_MAX_PAPERS || '40' }}
+          DOMAIN_WORKERS: ${{ vars.DOMAIN_WORKERS || secrets.DOMAIN_WORKERS || '4' }}
           REPORT_DIR: reports
-          DISABLE_LLM: ${{ vars.DISABLE_LLM || '0' }}
+          DISABLE_LLM: ${{ vars.DISABLE_LLM || secrets.DISABLE_LLM || '0' }}
         run: python scripts/daily_ai_digest.py
 
       - name: Upload paper reports
