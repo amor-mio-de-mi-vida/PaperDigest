@@ -19,8 +19,7 @@ from bs4 import BeautifulSoup
 ARXIV_URL = "https://export.arxiv.org/api/query"
 HF_PAPERS_URL = "https://huggingface.co/papers"
 SLACK_API_URL = "https://slack.com/api/chat.postMessage"
-SLACK_UPLOAD_URL_API = "https://slack.com/api/files.getUploadURLExternal"
-SLACK_COMPLETE_UPLOAD_API = "https://slack.com/api/files.completeUploadExternal"
+SLACK_CANVAS_CREATE_API = "https://slack.com/api/canvases.create"
 VALUE_LABELS = {"值得精读", "值得扫读", "可以忽略"}
 _LAST_ARXIV_REQUEST_AT = 0.0
 
@@ -517,7 +516,7 @@ def normalize_digest_result(domain: DomainConfig, result: dict, papers: List[Pap
     }
 
 
-def build_slack_message(domain: DomainConfig, papers: List[Paper], result: dict, date_str: str, filename: str) -> str:
+def build_slack_message(domain: DomainConfig, papers: List[Paper], result: dict, date_str: str, canvas_id: Optional[str]) -> str:
     by_title = {paper.title: paper for paper in papers}
     lines = [f"*Daily AI Research Brief - {date_str}*", f"*领域：{domain.name}*", "", "*🔥 今日推荐精读 Top 3*", ""]
     for index, item in enumerate(result["top_picks"][:3], 1):
@@ -539,7 +538,8 @@ def build_slack_message(domain: DomainConfig, papers: List[Paper], result: dict,
     lines.extend([f"- {item}" for item in summary["methods"]])
     lines.extend(["", "*研究结果*"])
     lines.extend([f"- {item}" for item in summary["results"]])
-    lines.extend(["", "*📎 全量论文链接与摘要*", f"已上传今日总 Markdown 文件：`{filename}`。文件中只包含各领域全量论文链接和完整原始摘要。"])
+    canvas_suffix = f"（Canvas ID: `{canvas_id}`）" if canvas_id else ""
+    lines.extend(["", "*📎 全量论文链接与摘要*", f"已创建今日总 Slack Canvas{canvas_suffix}。Canvas 中只包含各领域全量论文链接和完整原始摘要。"])
     return "\n".join(lines)[:39000]
 
 
@@ -609,44 +609,64 @@ def write_archive_file(config: DigestConfig, runtime: RuntimeConfig, daily_file:
     return archive_path
 
 
-def upload_slack_markdown_file(path: Path, channel: str, title: str) -> str:
+def slack_post_json(url: str, payload: dict, timeout: int = 30) -> dict:
     token = os.getenv("SLACK_BOT_TOKEN")
     if not token:
         raise RuntimeError("Missing SLACK_BOT_TOKEN")
 
-    content = path.read_bytes()
-    headers = {"Authorization": f"Bearer {token}"}
-    upload_resp = requests.post(
-        SLACK_UPLOAD_URL_API,
-        headers=headers,
-        data={"filename": path.name, "length": str(len(content))},
-        timeout=30,
-    )
-    upload_resp.raise_for_status()
-    upload_data = upload_resp.json()
-    if not upload_data.get("ok"):
-        raise RuntimeError(f"files.getUploadURLExternal error: {upload_data}")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    retries = int_env("SLACK_RETRIES", 4)
+    base_wait = float_env("SLACK_RETRY_BASE_SECONDS", 3.0)
+    max_wait = float_env("SLACK_RETRY_MAX_SECONDS", 60.0)
 
-    file_resp = requests.post(
-        upload_data["upload_url"],
-        data=content,
-        headers={"Content-Type": "text/markdown; charset=utf-8"},
+    last_error: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                if attempt >= retries:
+                    resp.raise_for_status()
+                retry_after = parse_retry_after(resp.headers.get("Retry-After", ""))
+                wait_seconds = retry_after if retry_after is not None else min(max_wait, base_wait * (2 ** attempt))
+                print(f"Warning: Slack API returned {resp.status_code}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
+                time.sleep(wait_seconds)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("ok") or attempt >= retries:
+                return data
+            if data.get("error") not in {"ratelimited", "request_timeout", "internal_error", "service_unavailable"}:
+                return data
+            wait_seconds = min(max_wait, base_wait * (2 ** attempt))
+            print(f"Warning: Slack API error {data.get('error')}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
+            time.sleep(wait_seconds)
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= retries:
+                raise
+            wait_seconds = min(max_wait, base_wait * (2 ** attempt))
+            print(f"Warning: Slack request failed: {exc}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
+            time.sleep(wait_seconds)
+
+    if last_error:
+        raise last_error
+    return {"ok": False, "error": "unknown_slack_error"}
+
+
+def create_slack_canvas_from_markdown(path: Path, channel: str, title: str) -> str:
+    markdown = path.read_text(encoding="utf-8")
+    data = slack_post_json(
+        SLACK_CANVAS_CREATE_API,
+        {
+            "title": title,
+            "channel_id": channel,
+            "document_content": {"type": "markdown", "markdown": markdown},
+        },
         timeout=60,
     )
-    file_resp.raise_for_status()
-
-    file_id = upload_data["file_id"]
-    complete_resp = requests.post(
-        SLACK_COMPLETE_UPLOAD_API,
-        headers={**headers, "Content-Type": "application/json"},
-        json={"channel_id": channel, "files": [{"id": file_id, "title": title}]},
-        timeout=30,
-    )
-    complete_resp.raise_for_status()
-    complete_data = complete_resp.json()
-    if not complete_data.get("ok"):
-        raise RuntimeError(f"files.completeUploadExternal error: {complete_data}")
-    return file_id
+    if not data.get("ok"):
+        raise RuntimeError(f"canvases.create error: {data}")
+    return data["canvas_id"]
 
 
 def get_slack_channel(config: DigestConfig) -> str:
@@ -657,17 +677,7 @@ def get_slack_channel(config: DigestConfig) -> str:
 
 
 def send_to_slack(text: str, channel: str) -> None:
-    token = os.getenv("SLACK_BOT_TOKEN")
-    if not token:
-        raise RuntimeError("Missing SLACK_BOT_TOKEN")
-    resp = requests.post(
-        SLACK_API_URL,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"channel": channel, "text": text, "mrkdwn": True},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    data = slack_post_json(SLACK_API_URL, {"channel": channel, "text": text, "mrkdwn": True}, timeout=30)
     if not data.get("ok"):
         raise RuntimeError(f"Slack API error: {data}")
 
@@ -680,7 +690,7 @@ def prepare_domain_output(domain: DomainConfig, runtime: RuntimeConfig, arxiv_pa
 
     analysis_papers = papers[:runtime.analysis_max_papers]
     if len(papers) > runtime.analysis_max_papers:
-        print(f"  [{domain.name}] using first {runtime.analysis_max_papers} papers for LLM analysis; daily file still contains all {len(papers)} papers.")
+        print(f"  [{domain.name}] using first {runtime.analysis_max_papers} papers for LLM analysis; daily report still contains all {len(papers)} papers.")
 
     endpoint, model, api_key = llm_config
     if runtime.disable_llm or not (endpoint and model and api_key):
@@ -690,17 +700,17 @@ def prepare_domain_output(domain: DomainConfig, runtime: RuntimeConfig, arxiv_pa
     return {"papers": papers, "result": result}
 
 
-def send_domain_brief(domain: DomainConfig, config: DigestConfig, runtime: RuntimeConfig, output: dict, daily_file: Path, uploaded_file_id: Optional[str]) -> str:
+def send_domain_brief(domain: DomainConfig, config: DigestConfig, runtime: RuntimeConfig, output: dict, canvas_id: Optional[str]) -> str:
     papers = output["papers"]
     if not papers:
         return f"[{domain.name}] no papers"
-    message = build_slack_message(domain, papers, output["result"], runtime.date_str, daily_file.name)
+    message = build_slack_message(domain, papers, output["result"], runtime.date_str, canvas_id)
     if runtime.dry_run:
         print(f"\n===== DRY RUN: {domain.name} =====\n{message[:6000]}\n")
         return f"[{domain.name}] dry-run ok ({len(papers)} papers)"
     channel = get_slack_channel(config)
     send_to_slack(message, channel)
-    suffix = f" with file {uploaded_file_id}" if uploaded_file_id else ""
+    suffix = f" with canvas {canvas_id}" if canvas_id else ""
     return f"[{domain.name}] sent to {channel}{suffix} ({len(papers)} papers)"
 
 
@@ -739,24 +749,18 @@ def main() -> None:
         archive_path = write_archive_file(config, runtime, daily_file)
         print(f"Updated archive file: {archive_path}")
 
-    uploaded_file_id: Optional[str] = None
+    canvas_id: Optional[str] = None
     if not runtime.dry_run:
-        upload_channel = get_slack_channel(config)
-        uploaded_file_id = upload_slack_markdown_file(daily_file, upload_channel, f"Daily AI Paper Digest - {runtime.date_str}")
-        print(f"Uploaded daily digest file {uploaded_file_id} to {upload_channel}")
+        channel = get_slack_channel(config)
+        canvas_id = create_slack_canvas_from_markdown(daily_file, channel, f"Daily AI Paper Digest - {runtime.date_str}")
+        print(f"Created daily digest canvas {canvas_id} in {channel}")
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(send_domain_brief, domain, config, runtime, domain_outputs.get(domain.id, {"papers": [], "result": fallback_digest(domain, [])}), daily_file, uploaded_file_id): domain
-            for domain in config.domains
-        }
-        for future in as_completed(futures):
-            domain = futures[future]
-            try:
-                print(future.result())
-            except Exception as exc:
-                print(f"[{domain.name}] failed: {exc}")
-                raise
+    for domain in config.domains:
+        try:
+            print(send_domain_brief(domain, config, runtime, domain_outputs.get(domain.id, {"papers": [], "result": fallback_digest(domain, [])}), canvas_id))
+        except Exception as exc:
+            print(f"[{domain.name}] failed: {exc}")
+            raise
 
 
 if __name__ == "__main__":

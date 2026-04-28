@@ -8,9 +8,9 @@ PaperDigest can:
 - Convert Hugging Face Trending Papers to arXiv papers when possible.
 - Deduplicate by arXiv ID, title, and URL.
 - Classify papers into configurable research domains using `config/domains.json`.
-- Generate one daily Markdown file containing navigation plus all paper links and complete original abstracts.
-- Upload that daily file to Slack once.
-- Send separate concise Slack briefs for each configured domain.
+- Generate one daily Markdown report containing navigation plus all paper links and complete original abstracts.
+- Create one Slack Canvas from that daily Markdown report.
+- Send separate concise research briefs to the Slack channel for each configured domain.
 
 ## Quick Start
 

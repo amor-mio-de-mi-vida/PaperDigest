@@ -42,7 +42,7 @@ Edit `config/domains.json`:
 Secrets:
 
 - `SLACK_BOT_TOKEN`
-- `SLACK_CHANNEL_ID`: unified Slack channel for the daily Markdown file and all domain briefs
+- `SLACK_CHANNEL_ID`: unified Slack channel for the daily Canvas and all domain briefs
 - `DEEPSEEK_API_KEY` or `OPENAI_API_KEY`
 
 Variables:
@@ -60,5 +60,8 @@ Variables:
 - `ANALYSIS_MAX_PAPERS=40`
 - `UPDATE_ARCHIVE=1`
 - `DAILY_FILE_NAME=daily-ai-paper-digest.md`
+- `SLACK_RETRIES=4`
+- `SLACK_RETRY_BASE_SECONDS=3`
+- `SLACK_RETRY_MAX_SECONDS=60`
 
-The workflow writes one daily Markdown file under `reports/YYYY-MM-DD/` with navigation plus all paper links and complete original abstracts, uploads that file to Slack once, sends per-domain Slack briefs, optionally copies the same content to `archive/YYYY-MM-DD.md`, commits archive updates, and uploads `reports/` as an artifact.
+The workflow writes one daily Markdown report under `reports/YYYY-MM-DD/` with navigation plus all paper links and complete original abstracts, creates one Slack Canvas from that report in the configured channel, sends per-domain Slack briefs to the channel, optionally copies the same content to `archive/YYYY-MM-DD.md`, commits archive updates, and uploads `reports/` as an artifact.
