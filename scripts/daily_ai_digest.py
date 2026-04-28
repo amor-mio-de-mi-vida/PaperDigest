@@ -3,6 +3,7 @@ import html
 import json
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -21,6 +22,7 @@ SLACK_API_URL = "https://slack.com/api/chat.postMessage"
 SLACK_UPLOAD_URL_API = "https://slack.com/api/files.getUploadURLExternal"
 SLACK_COMPLETE_UPLOAD_API = "https://slack.com/api/files.completeUploadExternal"
 VALUE_LABELS = {"值得精读", "值得扫读", "可以忽略"}
+_LAST_ARXIV_REQUEST_AT = 0.0
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,20 @@ def safe_filename(text: str) -> str:
 
 def truthy_env(name: str) -> bool:
     return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
 
 
 def load_digest_config(path: Path) -> DigestConfig:
@@ -175,21 +191,70 @@ def parse_arxiv_entry(entry, source: str = "arXiv") -> Paper:
     )
 
 
+def parse_retry_after(value: str) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return None
+
+
+def arxiv_get(params: dict, timeout: int = 60) -> requests.Response:
+    global _LAST_ARXIV_REQUEST_AT
+
+    retries = int_env("ARXIV_RETRIES", 6)
+    base_wait = float_env("ARXIV_RETRY_BASE_SECONDS", 20.0)
+    max_wait = float_env("ARXIV_RETRY_MAX_SECONDS", 300.0)
+    request_delay = float_env("ARXIV_REQUEST_DELAY_SECONDS", 3.5)
+
+    for attempt in range(retries + 1):
+        elapsed = time.monotonic() - _LAST_ARXIV_REQUEST_AT
+        if elapsed < request_delay:
+            time.sleep(request_delay - elapsed)
+
+        resp = requests.get(ARXIV_URL, params=params, timeout=timeout)
+        _LAST_ARXIV_REQUEST_AT = time.monotonic()
+        if resp.status_code not in {429, 500, 502, 503, 504}:
+            return resp
+
+        if attempt >= retries:
+            return resp
+
+        retry_after = parse_retry_after(resp.headers.get("Retry-After", ""))
+        wait_seconds = retry_after if retry_after is not None else min(max_wait, base_wait * (2 ** attempt))
+        print(f"Warning: arXiv API returned {resp.status_code}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
+        time.sleep(wait_seconds)
+
+    return resp
+
+
 def fetch_recent_arxiv(categories: Iterable[str], max_results: int) -> List[Paper]:
-    resp = requests.get(
-        ARXIV_URL,
-        params={
-            "search_query": arxiv_category_query(categories),
-            "sortBy": "submittedDate",
-            "sortOrder": "descending",
-            "start": "0",
-            "max_results": str(max_results),
-        },
-        timeout=60,
-    )
-    resp.raise_for_status()
-    feed = feedparser.parse(resp.text)
-    return [parse_arxiv_entry(entry) for entry in feed.entries]
+    papers: List[Paper] = []
+    page_size = max(1, min(max_results, int_env("ARXIV_PAGE_SIZE", 500)))
+    query = arxiv_category_query(categories)
+
+    for start in range(0, max_results, page_size):
+        resp = arxiv_get(
+            {
+                "search_query": query,
+                "sortBy": "submittedDate",
+                "sortOrder": "descending",
+                "start": str(start),
+                "max_results": str(min(page_size, max_results - start)),
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.text)
+        entries = [parse_arxiv_entry(entry) for entry in feed.entries]
+        if not entries:
+            break
+        papers.extend(entries)
+        if len(entries) < page_size:
+            break
+
+    return papers[:max_results]
 
 
 def paper_is_on_date(paper: Paper, date_str: str, timezone: str) -> bool:
@@ -219,7 +284,7 @@ def fetch_arxiv_by_ids(arxiv_ids: Iterable[str]) -> Dict[str, Paper]:
     out: Dict[str, Paper] = {}
 
     def fetch_chunk(chunk: List[str]) -> None:
-        resp = requests.get(ARXIV_URL, params={"id_list": ",".join(chunk)}, timeout=40)
+        resp = arxiv_get({"id_list": ",".join(chunk)}, timeout=40)
         if resp.status_code == 400 and len(chunk) > 1:
             print(f"Warning: arXiv rejected id batch of {len(chunk)} ids; retrying one by one.")
             for paper_id in chunk:
