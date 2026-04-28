@@ -136,11 +136,25 @@ def arxiv_category_query(categories: Iterable[str]) -> str:
 def extract_arxiv_id(url: str) -> str:
     arxiv_match = re.search(r"arxiv\.org/(?:abs|pdf)/([^?#]+)", url)
     if arxiv_match:
-        return arxiv_match.group(1).replace(".pdf", "")
+        return normalize_arxiv_id(arxiv_match.group(1).replace(".pdf", ""))
     hf_match = re.search(r"huggingface\.co/papers/([^/?#]+)", url)
     if hf_match:
-        return hf_match.group(1)
+        return normalize_arxiv_id(hf_match.group(1))
     return ""
+
+
+def normalize_arxiv_id(raw_id: str) -> str:
+    paper_id = clean_text(raw_id).strip().rstrip("/")
+    paper_id = paper_id.removesuffix(".pdf")
+    modern = r"\d{4}\.\d{4,5}(?:v\d+)?"
+    legacy = r"[a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?"
+    if re.fullmatch(modern, paper_id) or re.fullmatch(legacy, paper_id):
+        return paper_id
+    return ""
+
+
+def arxiv_id_base(paper_id: str) -> str:
+    return re.sub(r"v\d+$", "", paper_id)
 
 
 def parse_arxiv_entry(entry, source: str = "arXiv") -> Paper:
@@ -194,17 +208,29 @@ def fetch_arxiv_for_date(config: DigestConfig, runtime: RuntimeConfig) -> List[P
 
 
 def fetch_arxiv_by_ids(arxiv_ids: Iterable[str]) -> Dict[str, Paper]:
-    ids = [paper_id for paper_id in dict.fromkeys(arxiv_ids) if paper_id]
+    ids = [normalize_arxiv_id(paper_id) for paper_id in arxiv_ids]
+    ids = [paper_id for paper_id in dict.fromkeys(ids) if paper_id]
     out: Dict[str, Paper] = {}
-    for start in range(0, len(ids), 50):
-        chunk = ids[start:start + 50]
+
+    def fetch_chunk(chunk: List[str]) -> None:
         resp = requests.get(ARXIV_URL, params={"id_list": ",".join(chunk)}, timeout=40)
+        if resp.status_code == 400 and len(chunk) > 1:
+            print(f"Warning: arXiv rejected id batch of {len(chunk)} ids; retrying one by one.")
+            for paper_id in chunk:
+                fetch_chunk([paper_id])
+            return
+        if resp.status_code == 400:
+            print(f"Warning: skipping invalid or unavailable arXiv id from HuggingFace: {chunk[0]}")
+            return
         resp.raise_for_status()
         feed = feedparser.parse(resp.text)
         for entry in feed.entries:
             paper = parse_arxiv_entry(entry, source="HuggingFace/arXiv")
             if paper.arxiv_id:
-                out[paper.arxiv_id.split("v")[0]] = paper
+                out[arxiv_id_base(paper.arxiv_id)] = paper
+
+    for start in range(0, len(ids), 20):
+        fetch_chunk(ids[start:start + 20])
     return out
 
 
@@ -238,7 +264,7 @@ def fetch_huggingface(max_results: int) -> List[Paper]:
     arxiv_by_id = fetch_arxiv_by_ids(paper.arxiv_id for paper in candidates if paper.arxiv_id)
     papers = []
     for paper in candidates:
-        arxiv_key = paper.arxiv_id.split("v")[0] if paper.arxiv_id else ""
+        arxiv_key = arxiv_id_base(paper.arxiv_id) if paper.arxiv_id else ""
         papers.append(arxiv_by_id.get(arxiv_key) or paper)
     return papers
 
@@ -260,7 +286,7 @@ def dedupe(papers: Iterable[Paper]) -> List[Paper]:
     for paper in papers:
         keys = [normalize_title(paper.title)]
         if paper.arxiv_id:
-            keys.append(f"arxiv:{paper.arxiv_id.lower().split('v')[0]}")
+            keys.append(f"arxiv:{arxiv_id_base(paper.arxiv_id.lower())}")
         keys.append(hashlib.sha1(paper.url.split("?")[0].encode("utf-8")).hexdigest())
         if any(key in seen for key in keys):
             continue
