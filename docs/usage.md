@@ -56,4 +56,4 @@ Variables:
 - `UPDATE_ARCHIVE=1`
 - `DAILY_FILE_NAME=daily-ai-paper-digest.md`
 
-The workflow writes one daily Markdown file under `reports/YYYY-MM-DD/`, uploads that file to Slack once, sends per-domain Slack briefs, optionally copies the same content to `archive/YYYY-MM-DD.md`, commits archive updates, and uploads `reports/` as an artifact.
+The workflow writes one daily Markdown file under `reports/YYYY-MM-DD/` with navigation plus all paper links and complete original abstracts, uploads that file to Slack once, sends per-domain Slack briefs, optionally copies the same content to `archive/YYYY-MM-DD.md`, commits archive updates, and uploads `reports/` as an artifact.

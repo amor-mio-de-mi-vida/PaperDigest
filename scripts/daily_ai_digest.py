@@ -474,7 +474,7 @@ def build_slack_message(domain: DomainConfig, papers: List[Paper], result: dict,
     lines.extend([f"- {item}" for item in summary["methods"]])
     lines.extend(["", "*研究结果*"])
     lines.extend([f"- {item}" for item in summary["results"]])
-    lines.extend(["", "*📎 全量论文链接与摘要*", f"已上传今日总 Markdown 文件：`{filename}`。文件中包含 last updated、各领域简报和全量论文链接/摘要。"])
+    lines.extend(["", "*📎 全量论文链接与摘要*", f"已上传今日总 Markdown 文件：`{filename}`。文件中只包含各领域全量论文链接和完整原始摘要。"])
     return "\n".join(lines)[:39000]
 
 
@@ -496,29 +496,8 @@ def markdown_link_abstract_block(index: int, paper: Paper) -> List[str]:
     ]
 
 
-def build_domain_brief_markdown(domain: DomainConfig, papers: List[Paper], result: dict) -> List[str]:
-    by_title = {paper.title: paper for paper in papers}
-    lines = [f"## {domain.name}", "", "### 推荐精读 Top 3", ""]
-    for index, item in enumerate(result["top_picks"][:3], 1):
-        paper = by_title.get(item["title"])
-        if not paper:
-            continue
-        lines.extend([
-            f"{index}. [{paper.title}]({paper.url})",
-            f"   - 分类：{item['classification']}",
-            f"   - 研究价值：{item['value']}",
-            f"   - 关联：{item['relation']}",
-            "",
-        ])
-
-    summary = result["domain_summary"]
-    lines.extend(["### 领域痛点", ""])
-    lines.extend([f"- {item}" for item in summary["pain_points"]])
-    lines.extend(["", "### 研究方法", ""])
-    lines.extend([f"- {item}" for item in summary["methods"]])
-    lines.extend(["", "### 研究结果", ""])
-    lines.extend([f"- {item}" for item in summary["results"]])
-    lines.extend(["", "### 全量论文链接与摘要", ""])
+def build_domain_papers_markdown(domain: DomainConfig, papers: List[Paper]) -> List[str]:
+    lines = [f"## {domain.name}", ""]
     if papers:
         for index, paper in enumerate(papers, 1):
             lines.extend(markdown_link_abstract_block(index, paper))
@@ -536,7 +515,7 @@ def write_daily_digest_file(config: DigestConfig, runtime: RuntimeConfig, domain
         "",
         f"**Last updated:** {datetime.now(ZoneInfo(runtime.timezone)).strftime('%Y-%m-%d %H:%M:%S %Z')}",
         "",
-        "本文件包含当天所有配置领域的 Slack 简报和全量论文链接/原始摘要。Hugging Face Trending Papers 会先转换为对应 arXiv 论文，并与 arXiv New Papers 去重。",
+        "本文件只包含当天所有配置领域的全量论文链接和完整原始摘要；不包含分析、排序或 Slack 简报内容。Hugging Face Trending Papers 会先转换为对应 arXiv 论文，并与 arXiv New Papers 去重。",
         "",
         "## Navigation",
         "",
@@ -553,7 +532,7 @@ def write_daily_digest_file(config: DigestConfig, runtime: RuntimeConfig, domain
         if not output:
             lines.extend([f"## {domain.name}", "", "今日未抓取到论文。", ""])
             continue
-        lines.extend(build_domain_brief_markdown(domain, output["papers"], output["result"]))
+        lines.extend(build_domain_papers_markdown(domain, output["papers"]))
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return path
 
