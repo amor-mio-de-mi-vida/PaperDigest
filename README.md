@@ -41,8 +41,7 @@ Edit [`config/domains.json`](config/domains.json):
       "id": "agent",
       "name": "Agent",
       "filename": "agent",
-      "slack_channel_env": "SLACK_CHANNEL_AGENT",
-      "keywords": ["llm agent", "multi-agent", "tool use"]
+            "keywords": ["llm agent", "multi-agent", "tool use"]
     }
   ]
 }

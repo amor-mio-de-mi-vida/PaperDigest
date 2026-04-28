@@ -605,11 +605,10 @@ def upload_slack_markdown_file(path: Path, channel: str, title: str) -> str:
     return file_id
 
 
-def get_channel(domain: DomainConfig, config: DigestConfig) -> str:
-    channel = os.getenv(domain.slack_channel_env, "") if domain.slack_channel_env else ""
-    channel = channel or os.getenv(config.default_channel_env, "")
+def get_slack_channel(config: DigestConfig) -> str:
+    channel = os.getenv(config.default_channel_env, "")
     if not channel:
-        raise RuntimeError(f"Set {domain.slack_channel_env or config.default_channel_env} or {config.default_channel_env}")
+        raise RuntimeError(f"Set {config.default_channel_env} for the unified Slack channel")
     return channel
 
 
@@ -655,7 +654,7 @@ def send_domain_brief(domain: DomainConfig, config: DigestConfig, runtime: Runti
     if runtime.dry_run:
         print(f"\n===== DRY RUN: {domain.name} =====\n{message[:6000]}\n")
         return f"[{domain.name}] dry-run ok ({len(papers)} papers)"
-    channel = get_channel(domain, config)
+    channel = get_slack_channel(config)
     send_to_slack(message, channel)
     suffix = f" with file {uploaded_file_id}" if uploaded_file_id else ""
     return f"[{domain.name}] sent to {channel}{suffix} ({len(papers)} papers)"
@@ -698,14 +697,7 @@ def main() -> None:
 
     uploaded_file_id: Optional[str] = None
     if not runtime.dry_run:
-        upload_channel = os.getenv(config.default_channel_env, "")
-        if not upload_channel:
-            for domain in config.domains:
-                upload_channel = os.getenv(domain.slack_channel_env, "") if domain.slack_channel_env else ""
-                if upload_channel:
-                    break
-        if not upload_channel:
-            raise RuntimeError(f"Set {config.default_channel_env} or at least one domain slack_channel_env for daily file upload")
+        upload_channel = get_slack_channel(config)
         uploaded_file_id = upload_slack_markdown_file(daily_file, upload_channel, f"Daily AI Paper Digest - {runtime.date_str}")
         print(f"Uploaded daily digest file {uploaded_file_id} to {upload_channel}")
 

@@ -31,8 +31,7 @@ Edit `config/domains.json`:
       "id": "agent",
       "name": "Agent",
       "filename": "agent",
-      "slack_channel_env": "SLACK_CHANNEL_AGENT",
-      "keywords": ["llm agent", "multi-agent", "tool use"]
+            "keywords": ["llm agent", "multi-agent", "tool use"]
     }
   ]
 }
@@ -43,7 +42,7 @@ Edit `config/domains.json`:
 Secrets:
 
 - `SLACK_BOT_TOKEN`
-- `SLACK_CHANNEL_ID` or per-domain channel secrets such as `SLACK_CHANNEL_AGENT`
+- `SLACK_CHANNEL_ID`: unified Slack channel for the daily Markdown file and all domain briefs
 - `DEEPSEEK_API_KEY` or `OPENAI_API_KEY`
 
 Variables:

@@ -28,10 +28,6 @@ jobs:
       - name: Run digest job
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_DIFFUSION: ${{ secrets.SLACK_CHANNEL_DIFFUSION }}
-          SLACK_CHANNEL_EFFICIENT: ${{ secrets.SLACK_CHANNEL_EFFICIENT }}
-          SLACK_CHANNEL_RL: ${{ secrets.SLACK_CHANNEL_RL }}
-          SLACK_CHANNEL_AGENT: ${{ secrets.SLACK_CHANNEL_AGENT }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
