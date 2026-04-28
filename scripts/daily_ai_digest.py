@@ -52,10 +52,9 @@ class RuntimeConfig:
     report_dir: Path
     dry_run: bool
     disable_llm: bool
-    update_readme: bool
-    readme_path: Path
+    update_archive: bool
     archive_dir: Path
-    max_readme_papers_per_domain: int
+    daily_file_name: str
 
 
 @dataclass
@@ -130,10 +129,9 @@ def load_runtime_config() -> RuntimeConfig:
         report_dir=Path(os.getenv("REPORT_DIR", "reports")),
         dry_run=truthy_env("DRY_RUN"),
         disable_llm=truthy_env("DISABLE_LLM"),
-        update_readme=truthy_env("UPDATE_README"),
-        readme_path=Path(os.getenv("README_PATH", "README.md")),
+        update_archive=truthy_env("UPDATE_ARCHIVE") or truthy_env("UPDATE_README"),
         archive_dir=Path(os.getenv("ARCHIVE_DIR", "archive")),
-        max_readme_papers_per_domain=int(os.getenv("MAX_README_PAPERS_PER_DOMAIN", "20")),
+        daily_file_name=os.getenv("DAILY_FILE_NAME", "daily-ai-paper-digest.md"),
     )
 
 
@@ -476,36 +474,12 @@ def build_slack_message(domain: DomainConfig, papers: List[Paper], result: dict,
     lines.extend([f"- {item}" for item in summary["methods"]])
     lines.extend(["", "*研究结果*"])
     lines.extend([f"- {item}" for item in summary["results"]])
-    lines.extend(["", "*📎 全量论文链接与摘要*", f"已上传 Markdown 文件：`{filename}`。文件中只包含当天论文链接和原始摘要，不包含分析和排序。"])
+    lines.extend(["", "*📎 全量论文链接与摘要*", f"已上传今日总 Markdown 文件：`{filename}`。文件中包含 last updated、各领域简报和全量论文链接/摘要。"])
     return "\n".join(lines)[:39000]
 
 
-def write_domain_report(domain: DomainConfig, papers: List[Paper], runtime: RuntimeConfig) -> Path:
-    report_root = runtime.report_dir / runtime.date_str
-    report_root.mkdir(parents=True, exist_ok=True)
-    path = report_root / f"{domain.filename or domain.id}-papers.md"
-    path.write_text(build_paper_file_markdown(domain, papers, runtime.date_str), encoding="utf-8")
-    return path
-
-
-def build_paper_file_markdown(domain: DomainConfig, papers: List[Paper], date_str: str) -> str:
-    lines = [
-        f"# Daily AI Papers - {date_str}",
-        "",
-        f"领域：{domain.name}",
-        "",
-        "本文件只包含当天抓取到的论文链接和原始摘要，不包含分析和排序。",
-        "Hugging Face Trending Papers 会先转换为对应 arXiv 论文；转换成功后使用 arXiv 链接和 arXiv 摘要，并与 arXiv New Papers 去重。",
-        "",
-        "## All Papers (Deduped, arXiv Links When Available)",
-        "",
-    ]
-    if papers:
-        for index, paper in enumerate(papers, 1):
-            lines.extend(markdown_link_abstract_block(index, paper))
-    else:
-        lines.extend(["今日未抓取到论文。", ""])
-    return "\n".join(lines).rstrip() + "\n"
+def domain_anchor(domain: DomainConfig) -> str:
+    return domain.id
 
 
 def markdown_link_abstract_block(index: int, paper: Paper) -> List[str]:
@@ -522,106 +496,72 @@ def markdown_link_abstract_block(index: int, paper: Paper) -> List[str]:
     ]
 
 
-def domain_anchor(domain: DomainConfig) -> str:
-    return domain.id
+def build_domain_brief_markdown(domain: DomainConfig, papers: List[Paper], result: dict) -> List[str]:
+    by_title = {paper.title: paper for paper in papers}
+    lines = [f"## {domain.name}", "", "### 推荐精读 Top 3", ""]
+    for index, item in enumerate(result["top_picks"][:3], 1):
+        paper = by_title.get(item["title"])
+        if not paper:
+            continue
+        lines.extend([
+            f"{index}. [{paper.title}]({paper.url})",
+            f"   - 分类：{item['classification']}",
+            f"   - 研究价值：{item['value']}",
+            f"   - 关联：{item['relation']}",
+            "",
+        ])
+
+    summary = result["domain_summary"]
+    lines.extend(["### 领域痛点", ""])
+    lines.extend([f"- {item}" for item in summary["pain_points"]])
+    lines.extend(["", "### 研究方法", ""])
+    lines.extend([f"- {item}" for item in summary["methods"]])
+    lines.extend(["", "### 研究结果", ""])
+    lines.extend([f"- {item}" for item in summary["results"]])
+    lines.extend(["", "### 全量论文链接与摘要", ""])
+    if papers:
+        for index, paper in enumerate(papers, 1):
+            lines.extend(markdown_link_abstract_block(index, paper))
+    else:
+        lines.extend(["今日未抓取到论文。", ""])
+    return lines
 
 
-def markdown_link(text: str, target: str) -> str:
-    return f"[{text}]({target})"
-
-
-def build_archive_markdown(config: DigestConfig, runtime: RuntimeConfig, domain_papers: Dict[str, List[Paper]]) -> str:
+def write_daily_digest_file(config: DigestConfig, runtime: RuntimeConfig, domain_outputs: Dict[str, dict]) -> Path:
+    report_root = runtime.report_dir / runtime.date_str
+    report_root.mkdir(parents=True, exist_ok=True)
+    path = report_root / runtime.daily_file_name
     lines = [
-        f"# Daily AI Papers - {runtime.date_str}",
+        f"# Daily AI Paper Digest - {runtime.date_str}",
         "",
-        "本页按配置领域聚合当天论文；Hugging Face Trending Papers 已尽量转换为 arXiv 链接并去重。",
+        f"**Last updated:** {datetime.now(ZoneInfo(runtime.timezone)).strftime('%Y-%m-%d %H:%M:%S %Z')}",
+        "",
+        "本文件包含当天所有配置领域的 Slack 简报和全量论文链接/原始摘要。Hugging Face Trending Papers 会先转换为对应 arXiv 论文，并与 arXiv New Papers 去重。",
         "",
         "## Navigation",
         "",
     ]
     for domain in config.domains:
-        papers = domain_papers.get(domain.id, [])
+        output = domain_outputs.get(domain.id, {})
+        papers = output.get("papers", [])
         lines.append(f"- [{domain.name}](#{domain_anchor(domain)}) ({len(papers)})")
     lines.append("")
 
     for domain in config.domains:
-        papers = domain_papers.get(domain.id, [])
-        lines.extend([f'<a id="{domain_anchor(domain)}"></a>', "", f"## {domain.name}", ""])
-        if not papers:
-            lines.extend(["No papers matched this topic today.", ""])
+        output = domain_outputs.get(domain.id)
+        lines.extend([f'<a id="{domain_anchor(domain)}"></a>', ""])
+        if not output:
+            lines.extend([f"## {domain.name}", "", "今日未抓取到论文。", ""])
             continue
-        for index, paper in enumerate(papers, 1):
-            lines.extend([
-                f"### {index}. [{paper.title}]({paper.url})",
-                "",
-                f"- Source: `{paper.source}`",
-                f"- arXiv ID: `{paper.arxiv_id or 'N/A'}`",
-                "",
-                "**Abstract**",
-                "",
-                paper.abstract or "No abstract available.",
-                "",
-            ])
-    return "\n".join(lines).rstrip() + "\n"
+        lines.extend(build_domain_brief_markdown(domain, output["papers"], output["result"]))
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return path
 
 
-def build_readme_dashboard(config: DigestConfig, runtime: RuntimeConfig, domain_papers: Dict[str, List[Paper]], archive_path: Path) -> str:
-    archive_rel = archive_path.as_posix()
-    lines = [
-        "# PaperDigest",
-        "",
-        "Daily AI research digest powered by arXiv, Hugging Face Trending Papers, configurable topic keywords, Slack delivery, and GitHub archive pages.",
-        "",
-        f"**Last updated:** {runtime.date_str}",
-        "",
-        f"[Full daily archive]({archive_rel}) · [Usage](docs/usage.md)",
-        "",
-        "## Topics",
-        "",
-    ]
-    for domain in config.domains:
-        papers = domain_papers.get(domain.id, [])
-        lines.append(f"- [{domain.name}](#{domain_anchor(domain)}) · {len(papers)} papers")
-    lines.extend(["", "## Latest Papers", ""])
-
-    for domain in config.domains:
-        papers = domain_papers.get(domain.id, [])[:runtime.max_readme_papers_per_domain]
-        lines.extend([f'<a id="{domain_anchor(domain)}"></a>', "", f"### {domain.name}", ""])
-        if not papers:
-            lines.extend(["No papers matched this topic today.", ""])
-            continue
-        for paper in papers:
-            abstract = paper.abstract or "No abstract available."
-            preview = abstract[:360].rstrip() + ("..." if len(abstract) > 360 else "")
-            lines.extend([
-                f"- **[{paper.title}]({paper.url})**",
-                f"  - Source: `{paper.source}` · arXiv: `{paper.arxiv_id or 'N/A'}`",
-                f"  - {preview}",
-            ])
-        lines.append("")
-
-    lines.extend([
-        "## Configuration",
-        "",
-        "Edit [`config/domains.json`](config/domains.json) to add topics, keywords, arXiv categories, and Slack channel environment variables.",
-        "",
-        "## Operations",
-        "",
-        "This repository can run in two modes:",
-        "",
-        "- GitHub archive mode: update README and `archive/YYYY-MM-DD.md`.",
-        "- Slack mode: upload Markdown files and send concise research briefs to Slack channels.",
-        "",
-        "See [docs/usage.md](docs/usage.md) and `.env.example` for environment variables and GitHub Actions setup.",
-    ])
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def write_github_digest(config: DigestConfig, runtime: RuntimeConfig, domain_papers: Dict[str, List[Paper]]) -> Path:
-    archive_path = runtime.archive_dir / f"{runtime.date_str}.md"
+def write_archive_file(config: DigestConfig, runtime: RuntimeConfig, daily_file: Path) -> Path:
     runtime.archive_dir.mkdir(parents=True, exist_ok=True)
-    archive_path.write_text(build_archive_markdown(config, runtime, domain_papers), encoding="utf-8")
-    runtime.readme_path.write_text(build_readme_dashboard(config, runtime, domain_papers, archive_path), encoding="utf-8")
+    archive_path = runtime.archive_dir / f"{runtime.date_str}.md"
+    archive_path.write_text(daily_file.read_text(encoding="utf-8"), encoding="utf-8")
     return archive_path
 
 
@@ -689,36 +629,36 @@ def send_to_slack(text: str, channel: str) -> None:
         raise RuntimeError(f"Slack API error: {data}")
 
 
-def process_domain(domain: DomainConfig, config: DigestConfig, runtime: RuntimeConfig, arxiv_papers_all: List[Paper], hf_papers: List[Paper], llm_config: Tuple[Optional[str], Optional[str], Optional[str]]) -> str:
+def prepare_domain_output(domain: DomainConfig, runtime: RuntimeConfig, arxiv_papers_all: List[Paper], hf_papers: List[Paper], llm_config: Tuple[Optional[str], Optional[str], Optional[str]]) -> dict:
     arxiv_papers = [paper for paper in arxiv_papers_all if paper_matches_domain(paper, domain)]
     domain_hf = [paper for paper in hf_papers if paper_matches_domain(paper, domain)][:runtime.hf_max_per_domain]
     papers = dedupe(arxiv_papers + domain_hf)
-    if not papers:
-        return f"[{domain.name}] no papers"
-
     print(f"  [{domain.name}] {len(arxiv_papers)} arXiv-today matches + {len(domain_hf)} HF/arXiv matches -> {len(papers)} deduped")
+
     analysis_papers = papers[:runtime.analysis_max_papers]
     if len(papers) > runtime.analysis_max_papers:
-        print(f"  [{domain.name}] using first {runtime.analysis_max_papers} papers for LLM analysis; Slack file still contains all {len(papers)} papers.")
+        print(f"  [{domain.name}] using first {runtime.analysis_max_papers} papers for LLM analysis; daily file still contains all {len(papers)} papers.")
 
     endpoint, model, api_key = llm_config
     if runtime.disable_llm or not (endpoint and model and api_key):
         result = fallback_digest(domain, analysis_papers)
     else:
         result = build_digest_with_llm(domain, analysis_papers, endpoint, model, api_key)
+    return {"papers": papers, "result": result}
 
-    report_path = write_domain_report(domain, papers, runtime)
-    message = build_slack_message(domain, papers, result, runtime.date_str, report_path.name)
 
+def send_domain_brief(domain: DomainConfig, config: DigestConfig, runtime: RuntimeConfig, output: dict, daily_file: Path, uploaded_file_id: Optional[str]) -> str:
+    papers = output["papers"]
+    if not papers:
+        return f"[{domain.name}] no papers"
+    message = build_slack_message(domain, papers, output["result"], runtime.date_str, daily_file.name)
     if runtime.dry_run:
         print(f"\n===== DRY RUN: {domain.name} =====\n{message[:6000]}\n")
-        print(f"  [{domain.name}] markdown file written: {report_path}")
         return f"[{domain.name}] dry-run ok ({len(papers)} papers)"
-
     channel = get_channel(domain, config)
-    file_id = upload_slack_markdown_file(report_path, channel, f"{domain.name} Papers - {runtime.date_str}")
     send_to_slack(message, channel)
-    return f"[{domain.name}] uploaded {file_id} and sent to {channel} ({len(papers)} papers)"
+    suffix = f" with file {uploaded_file_id}" if uploaded_file_id else ""
+    return f"[{domain.name}] sent to {channel}{suffix} ({len(papers)} papers)"
 
 
 def main() -> None:
@@ -736,19 +676,42 @@ def main() -> None:
     hf_papers = [paper for paper in fetch_huggingface(runtime.hf_max_results) if paper_is_on_date(paper, runtime.date_str, runtime.timezone)]
     print(f"HuggingFace/arXiv candidates on {runtime.date_str}: {len(hf_papers)}")
 
-    domain_papers = {}
-    for domain in config.domains:
-        arxiv_matches = [paper for paper in arxiv_papers_all if paper_matches_domain(paper, domain)]
-        hf_matches = [paper for paper in hf_papers if paper_matches_domain(paper, domain)][:runtime.hf_max_per_domain]
-        domain_papers[domain.id] = dedupe(arxiv_matches + hf_matches)
+    domain_outputs: Dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(prepare_domain_output, domain, runtime, arxiv_papers_all, hf_papers, llm_config): domain
+            for domain in config.domains
+        }
+        for future in as_completed(futures):
+            domain = futures[future]
+            try:
+                domain_outputs[domain.id] = future.result()
+            except Exception as exc:
+                print(f"[{domain.name}] failed: {exc}")
+                raise
 
-    if runtime.update_readme:
-        archive_path = write_github_digest(config, runtime, domain_papers)
-        print(f"Updated {runtime.readme_path} and {archive_path}")
+    daily_file = write_daily_digest_file(config, runtime, domain_outputs)
+    print(f"Wrote daily digest file: {daily_file}")
+    if runtime.update_archive:
+        archive_path = write_archive_file(config, runtime, daily_file)
+        print(f"Updated archive file: {archive_path}")
+
+    uploaded_file_id: Optional[str] = None
+    if not runtime.dry_run:
+        upload_channel = os.getenv(config.default_channel_env, "")
+        if not upload_channel:
+            for domain in config.domains:
+                upload_channel = os.getenv(domain.slack_channel_env, "") if domain.slack_channel_env else ""
+                if upload_channel:
+                    break
+        if not upload_channel:
+            raise RuntimeError(f"Set {config.default_channel_env} or at least one domain slack_channel_env for daily file upload")
+        uploaded_file_id = upload_slack_markdown_file(daily_file, upload_channel, f"Daily AI Paper Digest - {runtime.date_str}")
+        print(f"Uploaded daily digest file {uploaded_file_id} to {upload_channel}")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(process_domain, domain, config, runtime, arxiv_papers_all, hf_papers, llm_config): domain
+            executor.submit(send_domain_brief, domain, config, runtime, domain_outputs.get(domain.id, {"papers": [], "result": fallback_digest(domain, [])}), daily_file, uploaded_file_id): domain
             for domain in config.domains
         }
         for future in as_completed(futures):

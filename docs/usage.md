@@ -15,7 +15,7 @@ Quick local test without Slack or LLM:
 
 ```bash
 set -a && source .env && set +a
-DRY_RUN=1 DISABLE_LLM=1 UPDATE_README=1 ARXIV_MAX_RESULTS=80 HF_MAX_RESULTS=8 HF_MAX_PER_DOMAIN=8 python scripts/daily_ai_digest.py
+DRY_RUN=1 DISABLE_LLM=1 UPDATE_ARCHIVE=1 ARXIV_MAX_RESULTS=80 HF_MAX_RESULTS=8 HF_MAX_PER_DOMAIN=8 python scripts/daily_ai_digest.py
 ```
 
 ## Configure Topics
@@ -54,7 +54,7 @@ Variables:
 - `HF_MAX_RESULTS=120`
 - `HF_MAX_PER_DOMAIN=100`
 - `ANALYSIS_MAX_PAPERS=40`
-- `UPDATE_README=1`
-- `MAX_README_PAPERS_PER_DOMAIN=20`
+- `UPDATE_ARCHIVE=1`
+- `DAILY_FILE_NAME=daily-ai-paper-digest.md`
 
-The workflow writes `archive/YYYY-MM-DD.md`, updates `README.md`, uploads Slack Markdown files, sends Slack briefs, commits generated GitHub archive updates, and uploads `reports/` as an artifact.
+The workflow writes one daily Markdown file under `reports/YYYY-MM-DD/`, uploads that file to Slack once, sends per-domain Slack briefs, optionally copies the same content to `archive/YYYY-MM-DD.md`, commits archive updates, and uploads `reports/` as an artifact.

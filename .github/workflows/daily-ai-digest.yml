@@ -47,19 +47,18 @@ jobs:
           DOMAIN_WORKERS: ${{ vars.DOMAIN_WORKERS || secrets.DOMAIN_WORKERS || '4' }}
           REPORT_DIR: reports
           DISABLE_LLM: ${{ vars.DISABLE_LLM || secrets.DISABLE_LLM || '0' }}
-          UPDATE_README: ${{ vars.UPDATE_README || '1' }}
-          README_PATH: README.md
+          UPDATE_ARCHIVE: ${{ vars.UPDATE_ARCHIVE || '1' }}
           ARCHIVE_DIR: archive
-          MAX_README_PAPERS_PER_DOMAIN: ${{ vars.MAX_README_PAPERS_PER_DOMAIN || '20' }}
+          DAILY_FILE_NAME: ${{ vars.DAILY_FILE_NAME || 'daily-ai-paper-digest.md' }}
         run: python scripts/daily_ai_digest.py
 
-      - name: Commit README and archive updates
+      - name: Commit archive updates
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md archive reports
-          git diff --cached --quiet || git commit -m "Update daily paper digest"
+          git add archive
+          git diff --cached --quiet || git commit -m "Update daily paper archive"
           git push
 
       - name: Upload paper reports
