@@ -1,0 +1,54 @@
+name: Daily AI Digest to Slack
+
+on:
+  schedule:
+    # 09:00 Singapore/China time = 01:00 UTC
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest job
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_DIFFUSION: ${{ secrets.SLACK_CHANNEL_DIFFUSION }}
+          SLACK_CHANNEL_EFFICIENT: ${{ secrets.SLACK_CHANNEL_EFFICIENT }}
+          SLACK_CHANNEL_RL: ${{ secrets.SLACK_CHANNEL_RL }}
+          SLACK_CHANNEL_AGENT: ${{ secrets.SLACK_CHANNEL_AGENT }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
+          DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          DIGEST_CONFIG: ${{ vars.DIGEST_CONFIG || 'config/domains.json' }}
+          TIMEZONE: ${{ vars.TIMEZONE || 'Asia/Singapore' }}
+          ARXIV_MAX_RESULTS: ${{ vars.ARXIV_MAX_RESULTS || '2000' }}
+          HF_MAX_RESULTS: ${{ vars.HF_MAX_RESULTS || '80' }}
+          HF_MAX_PER_DOMAIN: ${{ vars.HF_MAX_PER_DOMAIN || '100' }}
+          ANALYSIS_MAX_PAPERS: ${{ vars.ANALYSIS_MAX_PAPERS || '40' }}
+          DOMAIN_WORKERS: ${{ vars.DOMAIN_WORKERS || '4' }}
+          REPORT_DIR: reports
+          DISABLE_LLM: ${{ vars.DISABLE_LLM || '0' }}
+        run: python scripts/daily_ai_digest.py
+
+      - name: Upload paper reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-ai-paper-reports
+          path: reports
+          if-no-files-found: ignore
