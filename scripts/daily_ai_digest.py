@@ -52,6 +52,10 @@ class RuntimeConfig:
     report_dir: Path
     dry_run: bool
     disable_llm: bool
+    update_readme: bool
+    readme_path: Path
+    archive_dir: Path
+    max_readme_papers_per_domain: int
 
 
 @dataclass
@@ -126,6 +130,10 @@ def load_runtime_config() -> RuntimeConfig:
         report_dir=Path(os.getenv("REPORT_DIR", "reports")),
         dry_run=truthy_env("DRY_RUN"),
         disable_llm=truthy_env("DISABLE_LLM"),
+        update_readme=truthy_env("UPDATE_README"),
+        readme_path=Path(os.getenv("README_PATH", "README.md")),
+        archive_dir=Path(os.getenv("ARCHIVE_DIR", "archive")),
+        max_readme_papers_per_domain=int(os.getenv("MAX_README_PAPERS_PER_DOMAIN", "20")),
     )
 
 
@@ -514,6 +522,109 @@ def markdown_link_abstract_block(index: int, paper: Paper) -> List[str]:
     ]
 
 
+def domain_anchor(domain: DomainConfig) -> str:
+    return domain.id
+
+
+def markdown_link(text: str, target: str) -> str:
+    return f"[{text}]({target})"
+
+
+def build_archive_markdown(config: DigestConfig, runtime: RuntimeConfig, domain_papers: Dict[str, List[Paper]]) -> str:
+    lines = [
+        f"# Daily AI Papers - {runtime.date_str}",
+        "",
+        "本页按配置领域聚合当天论文；Hugging Face Trending Papers 已尽量转换为 arXiv 链接并去重。",
+        "",
+        "## Navigation",
+        "",
+    ]
+    for domain in config.domains:
+        papers = domain_papers.get(domain.id, [])
+        lines.append(f"- [{domain.name}](#{domain_anchor(domain)}) ({len(papers)})")
+    lines.append("")
+
+    for domain in config.domains:
+        papers = domain_papers.get(domain.id, [])
+        lines.extend([f'<a id="{domain_anchor(domain)}"></a>', "", f"## {domain.name}", ""])
+        if not papers:
+            lines.extend(["No papers matched this topic today.", ""])
+            continue
+        for index, paper in enumerate(papers, 1):
+            lines.extend([
+                f"### {index}. [{paper.title}]({paper.url})",
+                "",
+                f"- Source: `{paper.source}`",
+                f"- arXiv ID: `{paper.arxiv_id or 'N/A'}`",
+                "",
+                "**Abstract**",
+                "",
+                paper.abstract or "No abstract available.",
+                "",
+            ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_readme_dashboard(config: DigestConfig, runtime: RuntimeConfig, domain_papers: Dict[str, List[Paper]], archive_path: Path) -> str:
+    archive_rel = archive_path.as_posix()
+    lines = [
+        "# PaperDigest",
+        "",
+        "Daily AI research digest powered by arXiv, Hugging Face Trending Papers, configurable topic keywords, Slack delivery, and GitHub archive pages.",
+        "",
+        f"**Last updated:** {runtime.date_str}",
+        "",
+        f"[Full daily archive]({archive_rel}) · [Usage](docs/usage.md)",
+        "",
+        "## Topics",
+        "",
+    ]
+    for domain in config.domains:
+        papers = domain_papers.get(domain.id, [])
+        lines.append(f"- [{domain.name}](#{domain_anchor(domain)}) · {len(papers)} papers")
+    lines.extend(["", "## Latest Papers", ""])
+
+    for domain in config.domains:
+        papers = domain_papers.get(domain.id, [])[:runtime.max_readme_papers_per_domain]
+        lines.extend([f'<a id="{domain_anchor(domain)}"></a>', "", f"### {domain.name}", ""])
+        if not papers:
+            lines.extend(["No papers matched this topic today.", ""])
+            continue
+        for paper in papers:
+            abstract = paper.abstract or "No abstract available."
+            preview = abstract[:360].rstrip() + ("..." if len(abstract) > 360 else "")
+            lines.extend([
+                f"- **[{paper.title}]({paper.url})**",
+                f"  - Source: `{paper.source}` · arXiv: `{paper.arxiv_id or 'N/A'}`",
+                f"  - {preview}",
+            ])
+        lines.append("")
+
+    lines.extend([
+        "## Configuration",
+        "",
+        "Edit [`config/domains.json`](config/domains.json) to add topics, keywords, arXiv categories, and Slack channel environment variables.",
+        "",
+        "## Operations",
+        "",
+        "This repository can run in two modes:",
+        "",
+        "- GitHub archive mode: update README and `archive/YYYY-MM-DD.md`.",
+        "- Slack mode: upload Markdown files and send concise research briefs to Slack channels.",
+        "",
+        "See [docs/usage.md](docs/usage.md) and `.env.example` for environment variables and GitHub Actions setup.",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_github_digest(config: DigestConfig, runtime: RuntimeConfig, domain_papers: Dict[str, List[Paper]]) -> Path:
+    archive_path = runtime.archive_dir / f"{runtime.date_str}.md"
+    runtime.archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_path.write_text(build_archive_markdown(config, runtime, domain_papers), encoding="utf-8")
+    runtime.readme_path.write_text(build_readme_dashboard(config, runtime, domain_papers, archive_path), encoding="utf-8")
+    return archive_path
+
+
 def upload_slack_markdown_file(path: Path, channel: str, title: str) -> str:
     token = os.getenv("SLACK_BOT_TOKEN")
     if not token:
@@ -624,6 +735,16 @@ def main() -> None:
     print("Fetching HuggingFace trending papers once and converting to arXiv...")
     hf_papers = [paper for paper in fetch_huggingface(runtime.hf_max_results) if paper_is_on_date(paper, runtime.date_str, runtime.timezone)]
     print(f"HuggingFace/arXiv candidates on {runtime.date_str}: {len(hf_papers)}")
+
+    domain_papers = {}
+    for domain in config.domains:
+        arxiv_matches = [paper for paper in arxiv_papers_all if paper_matches_domain(paper, domain)]
+        hf_matches = [paper for paper in hf_papers if paper_matches_domain(paper, domain)][:runtime.hf_max_per_domain]
+        domain_papers[domain.id] = dedupe(arxiv_matches + hf_matches)
+
+    if runtime.update_readme:
+        archive_path = write_github_digest(config, runtime, domain_papers)
+        print(f"Updated {runtime.readme_path} and {archive_path}")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
