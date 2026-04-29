@@ -512,6 +512,13 @@ def parse_json_object(content: str) -> dict:
     return json.loads(content)
 
 
+def limit_text(text: str, max_chars: int = 150) -> str:
+    text = clean_text(text)
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip(" ，,。.;；") + "..."
+
+
 def fallback_digest(domain: DomainConfig, papers: List[Paper]) -> dict:
     items = []
     for paper in papers:
@@ -547,7 +554,9 @@ def build_digest_with_llm(domain: DomainConfig, papers: List[Paper], endpoint: s
             "按照研究价值从高到低排序输出全部论文。",
             "为每篇论文给出领域分类，可以是更细粒度的英文标签，例如 Video Generation / MoE。",
             "为每篇论文写中文3句话摘要，必须正好3句话。",
-            "为每篇论文分别抽取：领域痛点、研究方法、研究结果，每项用中文1到2句话。",
+            "为每篇论文分别抽取：领域痛点、研究方法、研究结果。",
+            "Top Picks 的 pain_point、method、result 要写得信息密度高一些，每项建议80到150个中文字符，且每项绝对不要超过150个中文字符。",
+            "pain_point 要说明这篇论文解决的具体研究痛点；method 要说明核心方法/机制；result 要说明关键实验结果、指标或结论。",
             "为每篇论文判断研究价值，只能使用：值得精读、值得扫读、可以忽略。",
             "选出3篇Top Picks；如果候选论文少于3篇则全部推荐。",
             "Top Picks 必须带上每篇论文自己的 pain_point、method、result；Slack 简报会逐篇展示，不要只写领域级汇总。",
@@ -577,9 +586,9 @@ def normalize_digest_result(domain: DomainConfig, result: dict, papers: List[Pap
             "title": clean_text(item.get("title", "")),
             "classification": clean_text(item.get("classification", domain.name)) or domain.name,
             "summary_zh": clean_text(item.get("summary_zh", "")) or "摘要生成失败，请打开原文查看。",
-            "pain_point": clean_text(item.get("pain_point", "")) or "痛点提取失败，请查看原始摘要。",
-            "method": clean_text(item.get("method", "")) or "方法提取失败，请查看原始摘要。",
-            "result": clean_text(item.get("result", "")) or "结果提取失败，请查看原始摘要。",
+            "pain_point": limit_text(item.get("pain_point", "") or "痛点提取失败，请查看原始摘要。"),
+            "method": limit_text(item.get("method", "") or "方法提取失败，请查看原始摘要。"),
+            "result": limit_text(item.get("result", "") or "结果提取失败，请查看原始摘要。"),
             "value": value if value in VALUE_LABELS else "值得扫读",
             "relation": clean_text(item.get("relation", "")) or f"和 {domain.name} 今日主题相关。",
         }
