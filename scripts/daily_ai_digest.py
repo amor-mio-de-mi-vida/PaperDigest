@@ -66,6 +66,7 @@ class Paper:
     url: str
     published: str = ""
     arxiv_id: str = ""
+    keywords: List[str] = None
 
 
 def clean_text(text: str) -> str:
@@ -187,6 +188,11 @@ def arxiv_id_base(paper_id: str) -> str:
 
 def parse_arxiv_entry(entry, source: str = "arXiv") -> Paper:
     url = entry.get("id", "").replace("http://", "https://")
+    keywords = []
+    for tag in entry.get("tags", []) or []:
+        term = clean_text(tag.get("term", "") if isinstance(tag, dict) else getattr(tag, "term", ""))
+        if term:
+            keywords.append(term)
     return Paper(
         source=source,
         title=clean_text(entry.get("title", "")),
@@ -194,6 +200,7 @@ def parse_arxiv_entry(entry, source: str = "arXiv") -> Paper:
         url=url,
         published=entry.get("published", ""),
         arxiv_id=extract_arxiv_id(url),
+        keywords=list(dict.fromkeys(keywords)),
     )
 
 
@@ -334,7 +341,7 @@ def fetch_huggingface(max_results: int) -> List[Paper]:
         card = link.find_parent(["article", "div", "li"]) or link
         abs_node = card.select_one("p") if hasattr(card, "select_one") else None
         abstract = clean_text(abs_node.get_text(" ", strip=True) if abs_node else "")
-        candidates.append(Paper("HuggingFace", title, abstract, url, arxiv_id=arxiv_id))
+        candidates.append(Paper("HuggingFace", title, abstract, url, arxiv_id=arxiv_id, keywords=[]))
         if len(candidates) >= max_results:
             break
 
@@ -357,9 +364,9 @@ def matched_keywords(paper: Paper, domain: DomainConfig) -> List[str]:
     return [keyword for keyword in domain.keywords if keyword_matches(blob, keyword)]
 
 
-def format_keywords(keywords: List[str], fallback: str) -> str:
-    values = keywords or [fallback]
-    return ", ".join(dict.fromkeys(values))
+def format_paper_keywords(paper: Paper) -> str:
+    keywords = [clean_text(keyword) for keyword in (paper.keywords or []) if clean_text(keyword)]
+    return ", ".join(dict.fromkeys(keywords)) or "未提供"
 
 
 def paper_matches_domain(paper: Paper, domain: DomainConfig) -> bool:
@@ -553,7 +560,7 @@ def build_slack_message(domain: DomainConfig, papers: List[Paper], result: dict,
         paper = by_title.get(item["title"])
         if not paper:
             continue
-        keywords = format_keywords(matched_keywords(paper, domain), domain.name)
+        keywords = format_paper_keywords(paper)
         lines.extend([
             f"{index}. <{paper.url}|{paper.title}>",
             f"   分类：{item['classification']}",
@@ -581,7 +588,7 @@ def markdown_link_abstract_block(index: int, paper: Paper, domain: DomainConfig)
         f"### {index}. [{paper.title}]({paper.url})",
         "",
         f"- 来源：{paper.source}",
-        f"- 关键词：{format_keywords(matched_keywords(paper, domain), domain.name)}",
+        f"- 关键词：{format_paper_keywords(paper)}",
         f"- 链接：<{paper.url}>",
         "",
         "**原始摘要**",
