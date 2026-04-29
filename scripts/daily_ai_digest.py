@@ -609,6 +609,16 @@ def write_archive_file(config: DigestConfig, runtime: RuntimeConfig, daily_file:
     return archive_path
 
 
+def markdown_for_slack_canvas(markdown: str) -> str:
+    lines = []
+    for line in markdown.splitlines():
+        if re.fullmatch(r'<a id="[^"]+"></a>', line.strip()):
+            continue
+        line = re.sub(r"\[([^\]]+)\]\(#[^)]+\)", r"\1", line)
+        lines.append(line)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def slack_post_json(url: str, payload: dict, timeout: int = 30) -> dict:
     token = os.getenv("SLACK_BOT_TOKEN")
     if not token:
@@ -654,7 +664,7 @@ def slack_post_json(url: str, payload: dict, timeout: int = 30) -> dict:
 
 
 def create_slack_canvas_from_markdown(path: Path, channel: str, title: str) -> str:
-    markdown = path.read_text(encoding="utf-8")
+    markdown = markdown_for_slack_canvas(path.read_text(encoding="utf-8"))
     data = slack_post_json(
         SLACK_CANVAS_CREATE_API,
         {
