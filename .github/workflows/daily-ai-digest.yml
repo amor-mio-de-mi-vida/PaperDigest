@@ -36,10 +36,10 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || secrets.DEEPSEEK_MODEL || 'deepseek-chat' }}
           DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL || 'gpt-4.1-mini' }}
           DIGEST_CONFIG: ${{ vars.DIGEST_CONFIG || secrets.DIGEST_CONFIG || 'config/domains.json' }}
           TIMEZONE: ${{ vars.TIMEZONE || secrets.TIMEZONE || 'Asia/Singapore' }}
           ARXIV_MAX_RESULTS: ${{ vars.ARXIV_MAX_RESULTS || secrets.ARXIV_MAX_RESULTS || '2000' }}

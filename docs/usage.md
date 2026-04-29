@@ -47,6 +47,8 @@ Secrets:
 
 Variables:
 
+- `DEEPSEEK_MODEL=deepseek-chat`
+- `OPENAI_MODEL=gpt-4.1-mini`
 - `DIGEST_CONFIG=config/domains.json`
 - `TIMEZONE=Asia/Singapore`
 - `ARXIV_MAX_RESULTS=2000`

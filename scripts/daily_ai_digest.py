@@ -87,6 +87,13 @@ def truthy_env(name: str) -> bool:
     return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
 
 
+def env_text(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
+
+
 def int_env(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -366,19 +373,33 @@ def dedupe(papers: Iterable[Paper]) -> List[Paper]:
 
 
 def get_llm_config() -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    if os.getenv("DEEPSEEK_API_KEY"):
+    deepseek_key = env_text("DEEPSEEK_API_KEY")
+    if deepseek_key:
         return (
-            os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1/chat/completions"),
-            os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-            os.getenv("DEEPSEEK_API_KEY"),
+            env_text("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1/chat/completions"),
+            env_text("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            deepseek_key,
         )
-    if os.getenv("OPENAI_API_KEY"):
+    openai_key = env_text("OPENAI_API_KEY")
+    if openai_key:
         return (
             "https://api.openai.com/v1/chat/completions",
-            os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-            os.getenv("OPENAI_API_KEY"),
+            env_text("OPENAI_MODEL", "gpt-4.1-mini"),
+            openai_key,
         )
     return None, None, None
+
+
+def describe_llm_config(runtime: RuntimeConfig, llm_config: Tuple[Optional[str], Optional[str], Optional[str]]) -> str:
+    endpoint, model, api_key = llm_config
+    if runtime.disable_llm:
+        return "LLM disabled by DISABLE_LLM=1; using fallback summaries."
+    if not api_key:
+        return "LLM disabled because no DEEPSEEK_API_KEY or OPENAI_API_KEY is configured; using fallback summaries."
+    if not model:
+        return "LLM disabled because model name is empty; using fallback summaries."
+    provider = "DeepSeek" if "deepseek" in (endpoint or "").lower() else "OpenAI-compatible"
+    return f"LLM enabled: {provider} model={model}"
 
 
 def call_llm(system: str, user: str, endpoint: str, model: str, api_key: str, timeout: int = 180) -> str:
@@ -731,6 +752,7 @@ def main() -> None:
     llm_config = get_llm_config()
 
     print(f"Loaded {len(config.domains)} domains from {runtime.config_path}")
+    print(describe_llm_config(runtime, llm_config))
     print(f"Fetching recent arXiv AI candidates and filtering local date {runtime.date_str}...")
     arxiv_papers_all = fetch_arxiv_for_date(config, runtime)
     print(f"arXiv today candidates: {len(arxiv_papers_all)}")
