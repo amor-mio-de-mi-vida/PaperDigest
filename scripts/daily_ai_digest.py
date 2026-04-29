@@ -512,7 +512,7 @@ def parse_json_object(content: str) -> dict:
     return json.loads(content)
 
 
-def limit_text(text: str, max_chars: int = 150) -> str:
+def limit_text(text: str, max_chars: int = 300) -> str:
     text = clean_text(text)
     if len(text) <= max_chars:
         return text
@@ -555,7 +555,7 @@ def build_digest_with_llm(domain: DomainConfig, papers: List[Paper], endpoint: s
             "为每篇论文给出领域分类，可以是更细粒度的英文标签，例如 Video Generation / MoE。",
             "为每篇论文写中文3句话摘要，必须正好3句话。",
             "为每篇论文分别抽取：领域痛点、研究方法、研究结果。",
-            "Top Picks 的 pain_point、method、result 要写得信息密度高一些，每项建议80到150个中文字符，且每项绝对不要超过150个中文字符。",
+            "Top Picks 的 pain_point、method、result 要写得信息密度高一些，每项建议160到300个中文字符，重点内容可以展开说明；每项不要超过300个中文字符。",
             "pain_point 要说明这篇论文解决的具体研究痛点；method 要说明核心方法/机制；result 要说明关键实验结果、指标或结论。",
             "为每篇论文判断研究价值，只能使用：值得精读、值得扫读、可以忽略。",
             "选出3篇Top Picks；如果候选论文少于3篇则全部推荐。",
