@@ -22,6 +22,22 @@ SLACK_API_URL = "https://slack.com/api/chat.postMessage"
 SLACK_CANVAS_CREATE_API = "https://slack.com/api/canvases.create"
 VALUE_LABELS = {"值得精读", "值得扫读", "可以忽略"}
 _LAST_ARXIV_REQUEST_AT = 0.0
+STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "can", "for", "from", "has", "have", "in", "into", "is", "it",
+    "its", "of", "on", "or", "our", "that", "the", "their", "these", "this", "to", "using", "via", "we", "with",
+    "across", "against", "based", "between", "data", "different", "during", "each", "existing", "first", "high",
+    "large", "many", "model", "models", "new", "novel", "paper", "performance", "propose", "proposed", "results",
+    "show", "shows", "significant", "task", "tasks", "training", "use", "used", "using", "various", "which", "while",
+}
+TECH_TERMS = [
+    "agent", "alignment", "attention", "autoregressive", "benchmark", "chain-of-thought", "code generation",
+    "contrastive learning", "diffusion", "distillation", "embodied ai", "fine-tuning", "foundation models",
+    "generative ai", "graph neural networks", "human feedback", "in-context learning", "knowledge distillation",
+    "large language models", "llm agents", "machine translation", "mixture of experts", "moe", "multi-agent",
+    "multimodal", "preference optimization", "reasoning", "reinforcement learning", "retrieval augmented generation",
+    "rlhf", "robot learning", "semantic segmentation", "speech recognition", "text-to-image", "text-to-video",
+    "transformer", "video generation", "vision-language", "world models",
+]
 
 
 @dataclass(frozen=True)
@@ -364,9 +380,65 @@ def matched_keywords(paper: Paper, domain: DomainConfig) -> List[str]:
     return [keyword for keyword in domain.keywords if keyword_matches(blob, keyword)]
 
 
+def tokenize_keyword_text(text: str) -> List[str]:
+    return re.findall(r"[A-Za-z][A-Za-z0-9+.-]*", text.lower())
+
+
+def readable_keyword(phrase: str) -> str:
+    special = {"llm": "LLM", "moe": "MoE", "rag": "RAG", "rlhf": "RLHF", "ai": "AI"}
+    words = []
+    for word in phrase.split():
+        words.append(special.get(word, word.upper() if len(word) <= 4 and word.isalpha() and word not in STOPWORDS else word))
+    return " ".join(words)
+
+
+def is_arxiv_category(keyword: str) -> bool:
+    return bool(re.fullmatch(r"[a-z-]+(?:\.[A-Z]{2})?", keyword))
+
+
+def extract_fine_keywords(paper: Paper, limit: int = 6) -> List[str]:
+    text = f"{paper.title}. {paper.abstract}"
+    lower = text.lower()
+    title_tokens = set(tokenize_keyword_text(paper.title))
+    tokens = tokenize_keyword_text(text)
+    scores: Dict[str, float] = {}
+
+    for term in TECH_TERMS:
+        if re.search(rf"\b{re.escape(term)}\b", lower):
+            scores[term] = scores.get(term, 0.0) + 8.0 + lower.count(term)
+
+    for size in (4, 3, 2, 1):
+        for index in range(0, max(0, len(tokens) - size + 1)):
+            gram_tokens = tokens[index:index + size]
+            if gram_tokens[0] in STOPWORDS or gram_tokens[-1] in STOPWORDS:
+                continue
+            if sum(token not in STOPWORDS for token in gram_tokens) < min(2, size):
+                continue
+            if any(len(token) <= 2 and not token.isupper() for token in gram_tokens):
+                continue
+            phrase = " ".join(gram_tokens)
+            if is_arxiv_category(phrase):
+                continue
+            score = 1.0 + size * 0.8
+            if any(token in title_tokens for token in gram_tokens):
+                score += 3.0
+            if any(char.isdigit() for char in phrase) or any("-" in token for token in gram_tokens):
+                score += 1.0
+            scores[phrase] = scores.get(phrase, 0.0) + score
+
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], len(item[0]), item[0]))
+    out = []
+    for phrase, _score in ranked:
+        if any(phrase in chosen or chosen in phrase for chosen in out):
+            continue
+        out.append(phrase)
+        if len(out) >= limit:
+            break
+    return [readable_keyword(item) for item in out]
+
+
 def format_paper_keywords(paper: Paper) -> str:
-    keywords = [clean_text(keyword) for keyword in (paper.keywords or []) if clean_text(keyword)]
-    return ", ".join(dict.fromkeys(keywords)) or "未提供"
+    return ", ".join(extract_fine_keywords(paper)) or "未提供"
 
 
 def paper_matches_domain(paper: Paper, domain: DomainConfig) -> bool:
