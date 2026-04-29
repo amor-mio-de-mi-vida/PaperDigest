@@ -462,11 +462,11 @@ def build_digest_with_llm(domain: DomainConfig, papers: List[Paper], endpoint: s
             "为每篇论文分别抽取：领域痛点、研究方法、研究结果，每项用中文1到2句话。",
             "为每篇论文判断研究价值，只能使用：值得精读、值得扫读、可以忽略。",
             "选出3篇Top Picks；如果候选论文少于3篇则全部推荐。",
-            "领域级总结必须重点总结今天有价值的研究点，分成 pain_points、methods、results 三组，每组3到5条中文bullet。",
-            "领域级总结每条bullet可以适当详细，建议1到3句话，重点写清楚痛点、方法或结果。",
+            "Top Picks 必须带上每篇论文自己的 pain_point、method、result；Slack 简报会逐篇展示，不要只写领域级汇总。",
+            "domain_summary 只作为兜底字段，可以简短；重点放在每篇推荐论文的有价值研究点。",
         ],
         "output_schema": {
-            "top_picks": [{"title": "原英文标题", "classification": "领域分类", "value": "值得精读", "relation": "关联说明"}],
+            "top_picks": [{"title": "原英文标题", "classification": "领域分类", "value": "值得精读", "relation": "关联说明", "pain_point": "这篇论文对应的领域痛点", "method": "这篇论文的研究方法", "result": "这篇论文的研究结果"}],
             "papers": [{"title": "原英文标题", "classification": "领域分类", "summary_zh": "三句话中文摘要。", "pain_point": "领域痛点。", "method": "研究方法。", "result": "研究结果。", "value": "值得精读|值得扫读|可以忽略", "relation": "关联说明"}],
             "domain_summary": {"pain_points": ["领域痛点bullet"], "methods": ["研究方法bullet"], "results": ["研究结果bullet"]},
         },
@@ -549,18 +549,15 @@ def build_slack_message(domain: DomainConfig, papers: List[Paper], result: dict,
             f"   分类：{item['classification']}",
             f"   研究价值：{item['value']}",
             f"   关联：{item['relation']}",
+            "   *有价值研究点*",
+            f"   - 痛点：{item['pain_point']}",
+            f"   - 方法：{item['method']}",
+            f"   - 结果：{item['result']}",
             "",
         ])
 
-    summary = result["domain_summary"]
-    lines.extend(["*🧠 今日有价值研究点*", "", "*领域痛点*"])
-    lines.extend([f"- {item}" for item in summary["pain_points"]])
-    lines.extend(["", "*研究方法*"])
-    lines.extend([f"- {item}" for item in summary["methods"]])
-    lines.extend(["", "*研究结果*"])
-    lines.extend([f"- {item}" for item in summary["results"]])
     canvas_suffix = f"（Canvas ID: `{canvas_id}`）" if canvas_id else ""
-    lines.extend(["", "*📎 全量论文链接与摘要*", f"已创建今日总 Slack Canvas{canvas_suffix}。Canvas 中只包含各领域全量论文链接和完整原始摘要。"])
+    lines.extend(["*📎 全量论文链接与摘要*", f"已创建今日总 Slack Canvas{canvas_suffix}。Canvas 中只包含各领域全量论文链接和完整原始摘要。"])
     return "\n".join(lines)[:39000]
 
 
