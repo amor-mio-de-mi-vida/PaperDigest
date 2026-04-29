@@ -60,6 +60,11 @@ jobs:
           SLACK_RETRIES: ${{ vars.SLACK_RETRIES || secrets.SLACK_RETRIES || '4' }}
           SLACK_RETRY_BASE_SECONDS: ${{ vars.SLACK_RETRY_BASE_SECONDS || secrets.SLACK_RETRY_BASE_SECONDS || '3' }}
           SLACK_RETRY_MAX_SECONDS: ${{ vars.SLACK_RETRY_MAX_SECONDS || secrets.SLACK_RETRY_MAX_SECONDS || '60' }}
+          LLM_WORKERS: ${{ vars.LLM_WORKERS || secrets.LLM_WORKERS || '1' }}
+          LLM_RETRIES: ${{ vars.LLM_RETRIES || secrets.LLM_RETRIES || '3' }}
+          LLM_RETRY_BASE_SECONDS: ${{ vars.LLM_RETRY_BASE_SECONDS || secrets.LLM_RETRY_BASE_SECONDS || '8' }}
+          LLM_RETRY_MAX_SECONDS: ${{ vars.LLM_RETRY_MAX_SECONDS || secrets.LLM_RETRY_MAX_SECONDS || '90' }}
+          LLM_JSON_RETRIES: ${{ vars.LLM_JSON_RETRIES || secrets.LLM_JSON_RETRIES || '2' }}
         run: python scripts/daily_ai_digest.py
 
       - name: Commit archive updates

@@ -5,6 +5,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import BoundedSemaphore
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ SLACK_API_URL = "https://slack.com/api/chat.postMessage"
 SLACK_CANVAS_CREATE_API = "https://slack.com/api/canvases.create"
 VALUE_LABELS = {"值得精读", "值得扫读", "可以忽略"}
 _LAST_ARXIV_REQUEST_AT = 0.0
+_LLM_SEMAPHORE: Optional[BoundedSemaphore] = None
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "can", "for", "from", "has", "have", "in", "into", "is", "it",
     "its", "of", "on", "or", "our", "that", "the", "their", "these", "this", "to", "using", "via", "we", "with",
@@ -490,20 +492,47 @@ def describe_llm_config(runtime: RuntimeConfig, llm_config: Tuple[Optional[str],
     return f"LLM enabled: {provider} model={model}"
 
 
+def get_llm_semaphore() -> BoundedSemaphore:
+    global _LLM_SEMAPHORE
+    if _LLM_SEMAPHORE is None:
+        _LLM_SEMAPHORE = BoundedSemaphore(max(1, int_env("LLM_WORKERS", 1)))
+    return _LLM_SEMAPHORE
+
+
 def call_llm(system: str, user: str, endpoint: str, model: str, api_key: str, timeout: int = 180) -> str:
-    resp = requests.post(
-        endpoint,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=timeout,
-    )
-    resp.raise_for_status()
-    return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    retries = int_env("LLM_RETRIES", 3)
+    base_wait = float_env("LLM_RETRY_BASE_SECONDS", 8.0)
+    max_wait = float_env("LLM_RETRY_MAX_SECONDS", 90.0)
+
+    with get_llm_semaphore():
+        for attempt in range(retries + 1):
+            try:
+                resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+                if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                    if attempt >= retries:
+                        resp.raise_for_status()
+                    retry_after = parse_retry_after(resp.headers.get("Retry-After", ""))
+                    wait_seconds = retry_after if retry_after is not None else min(max_wait, base_wait * (2 ** attempt))
+                    print(f"Warning: LLM API returned {resp.status_code}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
+                    time.sleep(wait_seconds)
+                    continue
+                resp.raise_for_status()
+                return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            except requests.RequestException as exc:
+                if attempt >= retries:
+                    raise
+                wait_seconds = min(max_wait, base_wait * (2 ** attempt))
+                print(f"Warning: LLM request failed: {exc}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
+                time.sleep(wait_seconds)
+
+    return ""
 
 
 def parse_json_object(content: str) -> dict:
@@ -519,28 +548,37 @@ def limit_text(text: str, max_chars: int = 300) -> str:
     return text[:max_chars].rstrip(" ，,。.;；") + "..."
 
 
-def fallback_digest(domain: DomainConfig, papers: List[Paper]) -> dict:
+def abstract_sentences(paper: Paper) -> List[str]:
+    sentences = re.split(r"(?<=[.!?。！？])\s+", paper.abstract or "")
+    return [clean_text(sentence) for sentence in sentences if clean_text(sentence)]
+
+
+def fallback_digest(domain: DomainConfig, papers: List[Paper], reason: str = "LLM 未生成结果") -> dict:
     items = []
     for paper in papers:
+        sentences = abstract_sentences(paper)
+        first = sentences[0] if sentences else paper.title
+        middle = sentences[1] if len(sentences) > 1 else first
+        last = sentences[-1] if sentences else first
         items.append(
             {
                 "title": paper.title,
                 "classification": domain.name,
-                "summary_zh": f"未配置 LLM，暂以规则模式保留这篇论文。它与 {domain.name} 的关键词匹配，但需要打开原文确认方法、实验和结论。",
-                "pain_point": "未配置 LLM，无法可靠抽取领域痛点；请查看原始摘要。",
-                "method": "未配置 LLM，无法可靠抽取研究方法；请查看原始摘要。",
-                "result": "未配置 LLM，无法可靠抽取研究结果；请查看原始摘要。",
+                "summary_zh": limit_text(f"{reason}，暂以摘要兜底。{first} {middle} {last}", 300),
+                "pain_point": limit_text(f"{reason}；从摘要看，这篇论文主要针对以下问题展开：{first}", 300),
+                "method": limit_text(f"{reason}；摘要中可见的核心方法或系统设计是：{middle}", 300),
+                "result": limit_text(f"{reason}；摘要中披露的主要结论或实验信号是：{last}", 300),
                 "value": "值得扫读",
-                "relation": f"和 {domain.name} 今日主题相关。",
+                "relation": f"和 {domain.name} 今日主题相关；建议打开原文确认模型未覆盖的细节。",
             }
         )
     return {
         "top_picks": items[:3],
         "papers": items,
         "domain_summary": {
-            "pain_points": [f"{domain.name} 今日有 {len(papers)} 篇去重后的候选论文。"],
-            "methods": ["当前为规则降级模式，接入模型后会归纳主流研究方法。"],
-            "results": ["当前为规则降级模式，接入模型后会总结实验结果和趋势信号。"],
+            "pain_points": [f"{domain.name} 今日有 {len(papers)} 篇去重后的候选论文；{reason}。"],
+            "methods": ["当前使用摘要兜底生成，请以原文和下一次 LLM 成功结果为准。"],
+            "results": ["摘要兜底仅保留论文的显式结果描述，不做额外推断。"],
         },
     }
 
@@ -569,12 +607,19 @@ def build_digest_with_llm(domain: DomainConfig, papers: List[Paper], endpoint: s
         },
         "papers": [asdict(paper) for paper in papers],
     }
-    try:
-        content = call_llm(system, json.dumps(user, ensure_ascii=False), endpoint, model, api_key)
-        return normalize_digest_result(domain, parse_json_object(content), papers)
-    except (requests.RequestException, json.JSONDecodeError, TypeError, AttributeError, KeyError) as exc:
-        print(f"  [{domain.name}] LLM failed, using fallback digest: {exc}")
-        return fallback_digest(domain, papers)
+    last_error: Optional[Exception] = None
+    attempts = int_env("LLM_JSON_RETRIES", 2) + 1
+    for attempt in range(attempts):
+        try:
+            content = call_llm(system, json.dumps(user, ensure_ascii=False), endpoint, model, api_key)
+            return normalize_digest_result(domain, parse_json_object(content), papers)
+        except (requests.RequestException, json.JSONDecodeError, TypeError, AttributeError, KeyError) as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                print(f"  [{domain.name}] LLM output failed ({exc}); retrying analysis ({attempt + 1}/{attempts - 1}).")
+                continue
+    print(f"  [{domain.name}] LLM failed, using abstract fallback digest: {last_error}")
+    return fallback_digest(domain, papers, "LLM 调用失败")
 
 
 def normalize_digest_result(domain: DomainConfig, result: dict, papers: List[Paper]) -> dict:
@@ -822,7 +867,7 @@ def prepare_domain_output(domain: DomainConfig, runtime: RuntimeConfig, arxiv_pa
 
     endpoint, model, api_key = llm_config
     if runtime.disable_llm or not (endpoint and model and api_key):
-        result = fallback_digest(domain, analysis_papers)
+        result = fallback_digest(domain, analysis_papers, "未配置或已禁用 LLM")
     else:
         result = build_digest_with_llm(domain, analysis_papers, endpoint, model, api_key)
     return {"papers": papers, "result": result}
@@ -886,7 +931,7 @@ def main() -> None:
 
     for domain in config.domains:
         try:
-            print(send_domain_brief(domain, config, runtime, domain_outputs.get(domain.id, {"papers": [], "result": fallback_digest(domain, [])}), canvas_id))
+            print(send_domain_brief(domain, config, runtime, domain_outputs.get(domain.id, {"papers": [], "result": fallback_digest(domain, [], "无论文")}), canvas_id))
         except Exception as exc:
             print(f"[{domain.name}] failed: {exc}")
             raise
