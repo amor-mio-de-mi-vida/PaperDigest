@@ -352,9 +352,18 @@ def keyword_matches(blob: str, keyword: str) -> bool:
     return keyword in blob
 
 
-def paper_matches_domain(paper: Paper, domain: DomainConfig) -> bool:
+def matched_keywords(paper: Paper, domain: DomainConfig) -> List[str]:
     blob = f"{paper.title} {paper.abstract}".lower()
-    return any(keyword_matches(blob, keyword) for keyword in domain.keywords)
+    return [keyword for keyword in domain.keywords if keyword_matches(blob, keyword)]
+
+
+def format_keywords(keywords: List[str], fallback: str) -> str:
+    values = keywords or [fallback]
+    return ", ".join(dict.fromkeys(values))
+
+
+def paper_matches_domain(paper: Paper, domain: DomainConfig) -> bool:
+    return bool(matched_keywords(paper, domain))
 
 
 def dedupe(papers: Iterable[Paper]) -> List[Paper]:
@@ -544,9 +553,11 @@ def build_slack_message(domain: DomainConfig, papers: List[Paper], result: dict,
         paper = by_title.get(item["title"])
         if not paper:
             continue
+        keywords = format_keywords(matched_keywords(paper, domain), domain.name)
         lines.extend([
             f"{index}. <{paper.url}|{paper.title}>",
             f"   分类：{item['classification']}",
+            f"   关键词：{keywords}",
             f"   研究价值：{item['value']}",
             f"   关联：{item['relation']}",
             "   *有价值研究点*",
@@ -565,11 +576,12 @@ def domain_anchor(domain: DomainConfig) -> str:
     return domain.id
 
 
-def markdown_link_abstract_block(index: int, paper: Paper) -> List[str]:
+def markdown_link_abstract_block(index: int, paper: Paper, domain: DomainConfig) -> List[str]:
     return [
         f"### {index}. [{paper.title}]({paper.url})",
         "",
         f"- 来源：{paper.source}",
+        f"- 关键词：{format_keywords(matched_keywords(paper, domain), domain.name)}",
         f"- 链接：<{paper.url}>",
         "",
         "**原始摘要**",
@@ -583,7 +595,7 @@ def build_domain_papers_markdown(domain: DomainConfig, papers: List[Paper]) -> L
     lines = [f"## {domain.name}", ""]
     if papers:
         for index, paper in enumerate(papers, 1):
-            lines.extend(markdown_link_abstract_block(index, paper))
+            lines.extend(markdown_link_abstract_block(index, paper, domain))
     else:
         lines.extend(["今日未抓取到论文。", ""])
     return lines
