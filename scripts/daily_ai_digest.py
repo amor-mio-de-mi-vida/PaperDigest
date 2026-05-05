@@ -231,38 +231,56 @@ def parse_retry_after(value: str) -> Optional[float]:
         return None
 
 
-def arxiv_get(params: dict, timeout: int = 60) -> requests.Response:
+def arxiv_get(params: dict, timeout: Optional[int] = None) -> requests.Response:
     global _LAST_ARXIV_REQUEST_AT
 
     retries = int_env("ARXIV_RETRIES", 6)
     base_wait = float_env("ARXIV_RETRY_BASE_SECONDS", 20.0)
     max_wait = float_env("ARXIV_RETRY_MAX_SECONDS", 300.0)
     request_delay = float_env("ARXIV_REQUEST_DELAY_SECONDS", 3.5)
+    timeout = timeout or int_env("ARXIV_TIMEOUT_SECONDS", 120)
+    last_error: Optional[requests.RequestException] = None
 
     for attempt in range(retries + 1):
         elapsed = time.monotonic() - _LAST_ARXIV_REQUEST_AT
         if elapsed < request_delay:
             time.sleep(request_delay - elapsed)
 
-        resp = requests.get(ARXIV_URL, params=params, timeout=timeout)
-        _LAST_ARXIV_REQUEST_AT = time.monotonic()
-        if resp.status_code not in {429, 500, 502, 503, 504}:
-            return resp
+        try:
+            resp = requests.get(
+                ARXIV_URL,
+                params=params,
+                headers={"User-Agent": env_text("ARXIV_USER_AGENT", "PaperDigest/1.0 (https://github.com/amor-mio-de-mi-vida/PaperDigest)")},
+                timeout=timeout,
+            )
+            _LAST_ARXIV_REQUEST_AT = time.monotonic()
+            if resp.status_code not in {429, 500, 502, 503, 504}:
+                return resp
 
-        if attempt >= retries:
-            return resp
+            if attempt >= retries:
+                return resp
 
-        retry_after = parse_retry_after(resp.headers.get("Retry-After", ""))
-        wait_seconds = retry_after if retry_after is not None else min(max_wait, base_wait * (2 ** attempt))
-        print(f"Warning: arXiv API returned {resp.status_code}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
-        time.sleep(wait_seconds)
+            retry_after = parse_retry_after(resp.headers.get("Retry-After", ""))
+            wait_seconds = retry_after if retry_after is not None else min(max_wait, base_wait * (2 ** attempt))
+            print(f"Warning: arXiv API returned {resp.status_code}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
+            time.sleep(wait_seconds)
+        except requests.RequestException as exc:
+            _LAST_ARXIV_REQUEST_AT = time.monotonic()
+            last_error = exc
+            if attempt >= retries:
+                raise
+            wait_seconds = min(max_wait, base_wait * (2 ** attempt))
+            print(f"Warning: arXiv request failed: {exc}; retrying in {wait_seconds:.0f}s ({attempt + 1}/{retries}).")
+            time.sleep(wait_seconds)
 
-    return resp
+    if last_error:
+        raise last_error
+    raise RuntimeError("arXiv request failed without response")
 
 
 def fetch_recent_arxiv(categories: Iterable[str], max_results: int) -> List[Paper]:
     papers: List[Paper] = []
-    page_size = max(1, min(max_results, int_env("ARXIV_PAGE_SIZE", 500)))
+    page_size = max(1, min(max_results, int_env("ARXIV_PAGE_SIZE", 200)))
     query = arxiv_category_query(categories)
 
     for start in range(0, max_results, page_size):
@@ -274,7 +292,7 @@ def fetch_recent_arxiv(categories: Iterable[str], max_results: int) -> List[Pape
                 "start": str(start),
                 "max_results": str(min(page_size, max_results - start)),
             },
-            timeout=60,
+            timeout=None,
         )
         resp.raise_for_status()
         feed = feedparser.parse(resp.text)
@@ -299,7 +317,11 @@ def paper_is_on_date(paper: Paper, date_str: str, timezone: str) -> bool:
 
 
 def fetch_arxiv_for_date(config: DigestConfig, runtime: RuntimeConfig) -> List[Paper]:
-    recent = fetch_recent_arxiv(config.arxiv_categories, runtime.arxiv_max_results)
+    try:
+        recent = fetch_recent_arxiv(config.arxiv_categories, runtime.arxiv_max_results)
+    except requests.RequestException as exc:
+        print(f"Warning: failed to fetch recent arXiv candidates after retries; continuing with HuggingFace only: {exc}")
+        return []
     today = [paper for paper in recent if paper_is_on_date(paper, runtime.date_str, runtime.timezone)]
     if len(today) == len(recent):
         print(
@@ -315,7 +337,11 @@ def fetch_arxiv_by_ids(arxiv_ids: Iterable[str]) -> Dict[str, Paper]:
     out: Dict[str, Paper] = {}
 
     def fetch_chunk(chunk: List[str]) -> None:
-        resp = arxiv_get({"id_list": ",".join(chunk)}, timeout=40)
+        try:
+            resp = arxiv_get({"id_list": ",".join(chunk)}, timeout=None)
+        except requests.RequestException as exc:
+            print(f"Warning: failed to convert HuggingFace papers to arXiv for batch of {len(chunk)} ids; keeping HF originals: {exc}")
+            return
         if resp.status_code == 400 and len(chunk) > 1:
             print(f"Warning: arXiv rejected id batch of {len(chunk)} ids; retrying one by one.")
             for paper_id in chunk:
@@ -323,6 +349,9 @@ def fetch_arxiv_by_ids(arxiv_ids: Iterable[str]) -> Dict[str, Paper]:
             return
         if resp.status_code == 400:
             print(f"Warning: skipping invalid or unavailable arXiv id from HuggingFace: {chunk[0]}")
+            return
+        if resp.status_code == 429 or 500 <= resp.status_code < 600:
+            print(f"Warning: arXiv id lookup returned {resp.status_code}; keeping {len(chunk)} HF originals.")
             return
         resp.raise_for_status()
         feed = feedparser.parse(resp.text)
@@ -873,6 +902,16 @@ def prepare_domain_output(domain: DomainConfig, runtime: RuntimeConfig, arxiv_pa
     return {"papers": papers, "result": result}
 
 
+def build_no_papers_message(runtime: RuntimeConfig, canvas_id: Optional[str]) -> str:
+    canvas_suffix = f"（Canvas ID: `{canvas_id}`）" if canvas_id else ""
+    return "\n".join([
+        f"*Daily AI Research Brief - {runtime.date_str}*",
+        "今日没有抓取到匹配配置领域的论文。",
+        "可能原因：arXiv 当天尚未发布新论文、arXiv API 限流/超时，或 HuggingFace 原始卡片缺少可匹配摘要。",
+        f"已创建今日总 Slack Canvas{canvas_suffix}，其中保留本次运行的空结果和导航。",
+    ])
+
+
 def send_domain_brief(domain: DomainConfig, config: DigestConfig, runtime: RuntimeConfig, output: dict, canvas_id: Optional[str]) -> str:
     papers = output["papers"]
     if not papers:
@@ -928,6 +967,15 @@ def main() -> None:
         channel = get_slack_channel(config)
         canvas_id = create_slack_canvas_from_markdown(daily_file, channel, f"Daily AI Paper Digest - {runtime.date_str}")
         print(f"Created daily digest canvas {canvas_id} in {channel}")
+
+    total_domain_papers = sum(len(output.get("papers", [])) for output in domain_outputs.values())
+    if total_domain_papers == 0:
+        message = build_no_papers_message(runtime, canvas_id)
+        if runtime.dry_run:
+            print(f"\n===== DRY RUN: no matched papers =====\n{message}\n")
+        else:
+            send_to_slack(message, get_slack_channel(config))
+        return
 
     for domain in config.domains:
         try:

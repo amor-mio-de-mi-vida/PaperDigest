@@ -43,11 +43,13 @@ jobs:
           DIGEST_CONFIG: ${{ vars.DIGEST_CONFIG || secrets.DIGEST_CONFIG || 'config/domains.json' }}
           TIMEZONE: ${{ vars.TIMEZONE || secrets.TIMEZONE || 'Asia/Singapore' }}
           ARXIV_MAX_RESULTS: ${{ vars.ARXIV_MAX_RESULTS || secrets.ARXIV_MAX_RESULTS || '2000' }}
-          ARXIV_PAGE_SIZE: ${{ vars.ARXIV_PAGE_SIZE || secrets.ARXIV_PAGE_SIZE || '500' }}
+          ARXIV_PAGE_SIZE: ${{ vars.ARXIV_PAGE_SIZE || secrets.ARXIV_PAGE_SIZE || '200' }}
           ARXIV_REQUEST_DELAY_SECONDS: ${{ vars.ARXIV_REQUEST_DELAY_SECONDS || secrets.ARXIV_REQUEST_DELAY_SECONDS || '3.5' }}
           ARXIV_RETRIES: ${{ vars.ARXIV_RETRIES || secrets.ARXIV_RETRIES || '6' }}
           ARXIV_RETRY_BASE_SECONDS: ${{ vars.ARXIV_RETRY_BASE_SECONDS || secrets.ARXIV_RETRY_BASE_SECONDS || '20' }}
           ARXIV_RETRY_MAX_SECONDS: ${{ vars.ARXIV_RETRY_MAX_SECONDS || secrets.ARXIV_RETRY_MAX_SECONDS || '300' }}
+          ARXIV_TIMEOUT_SECONDS: ${{ vars.ARXIV_TIMEOUT_SECONDS || secrets.ARXIV_TIMEOUT_SECONDS || '120' }}
+          ARXIV_USER_AGENT: ${{ vars.ARXIV_USER_AGENT || secrets.ARXIV_USER_AGENT || 'PaperDigest/1.0' }}
           HF_MAX_RESULTS: ${{ vars.HF_MAX_RESULTS || secrets.HF_MAX_RESULTS || '80' }}
           HF_MAX_PER_DOMAIN: ${{ vars.HF_MAX_PER_DOMAIN || secrets.HF_MAX_PER_DOMAIN || '100' }}
           ANALYSIS_MAX_PAPERS: ${{ vars.ANALYSIS_MAX_PAPERS || secrets.ANALYSIS_MAX_PAPERS || '40' }}
