@@ -794,10 +794,60 @@ def write_daily_digest_file(config: DigestConfig, runtime: RuntimeConfig, domain
     return path
 
 
-def write_archive_file(config: DigestConfig, runtime: RuntimeConfig, daily_file: Path) -> Path:
+def build_archive_summary_markdown(config: DigestConfig, runtime: RuntimeConfig, domain_outputs: Dict[str, dict]) -> List[str]:
+    lines = [f"## 每日摘要 - {runtime.date_str}", ""]
+    for domain in config.domains:
+        output = domain_outputs.get(domain.id)
+        if not output or not output.get("papers"):
+            lines.extend([f"### {domain.name}", "", "今日未抓取到论文。", ""])
+            continue
+
+        papers = output["papers"]
+        result = output["result"]
+        by_title = {paper.title: paper for paper in papers}
+        lines.extend([f"### {domain.name}", "", f"- 论文数：{len(papers)}", ""])
+
+        top_picks = result.get("top_picks", [])[:3]
+        if top_picks:
+            lines.extend(["**今日推荐精读 Top 3**", ""])
+            for index, item in enumerate(top_picks, 1):
+                paper = by_title.get(item.get("title", ""))
+                title = item.get("title", "未知论文")
+                title_line = f"[{title}]({paper.url})" if paper else title
+                lines.extend([
+                    f"{index}. {title_line}",
+                    f"   - 分类：{item.get('classification', '未分类')}",
+                    f"   - 研究价值：{item.get('value', '未评估')}",
+                    f"   - 关联：{item.get('relation', '未生成')}",
+                    f"   - 痛点：{item.get('pain_point', '未生成')}",
+                    f"   - 方法：{item.get('method', '未生成')}",
+                    f"   - 结果：{item.get('result', '未生成')}",
+                    "",
+                ])
+
+        domain_summary = result.get("domain_summary", {}) or {}
+        summary_sections = [
+            ("主要痛点", domain_summary.get("pain_points", [])),
+            ("方法趋势", domain_summary.get("methods", [])),
+            ("结果信号", domain_summary.get("results", [])),
+        ]
+        for label, bullets in summary_sections:
+            if bullets:
+                lines.append(f"**{label}**")
+                for bullet in bullets:
+                    lines.append(f"- {bullet}")
+                lines.append("")
+
+    lines.extend(["---", ""])
+    return lines
+
+
+def write_archive_file(config: DigestConfig, runtime: RuntimeConfig, daily_file: Path, domain_outputs: Dict[str, dict]) -> Path:
     runtime.archive_dir.mkdir(parents=True, exist_ok=True)
     archive_path = runtime.archive_dir / f"{runtime.date_str}.md"
-    archive_path.write_text(daily_file.read_text(encoding="utf-8"), encoding="utf-8")
+    lines = build_archive_summary_markdown(config, runtime, domain_outputs)
+    lines.append(daily_file.read_text(encoding="utf-8").rstrip())
+    archive_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return archive_path
 
 
@@ -959,7 +1009,7 @@ def main() -> None:
     daily_file = write_daily_digest_file(config, runtime, domain_outputs)
     print(f"Wrote daily digest file: {daily_file}")
     if runtime.update_archive:
-        archive_path = write_archive_file(config, runtime, daily_file)
+        archive_path = write_archive_file(config, runtime, daily_file, domain_outputs)
         print(f"Updated archive file: {archive_path}")
 
     canvas_id: Optional[str] = None

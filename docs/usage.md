@@ -73,4 +73,4 @@ Variables:
 - `LLM_RETRY_MAX_SECONDS=90`
 - `LLM_JSON_RETRIES=2`
 
-The workflow writes one daily Markdown report under `reports/YYYY-MM-DD/` with navigation plus all paper links and complete original abstracts, creates one Slack Canvas from that report in the configured channel, sends per-domain Slack briefs to the channel, optionally copies the same content to `archive/YYYY-MM-DD.md`, commits archive updates, and uploads `reports/` as an artifact.
+The workflow writes one daily Markdown report under `reports/YYYY-MM-DD/` with navigation plus all paper links and complete original abstracts, creates one Slack Canvas from that report in the configured channel, sends per-domain Slack briefs to the channel, optionally writes `archive/YYYY-MM-DD.md` with the daily summary prepended to the same report content, commits archive updates, and uploads `reports/` as an artifact.
