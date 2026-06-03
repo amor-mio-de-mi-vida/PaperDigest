@@ -1012,11 +1012,8 @@ def main() -> None:
         archive_path = write_archive_file(config, runtime, daily_file, domain_outputs)
         print(f"Updated archive file: {archive_path}")
 
+    # Canvas creation disabled: only send Slack messages.
     canvas_id: Optional[str] = None
-    if not runtime.dry_run:
-        channel = get_slack_channel(config)
-        canvas_id = create_slack_canvas_from_markdown(daily_file, channel, f"Daily AI Paper Digest - {runtime.date_str}")
-        print(f"Created daily digest canvas {canvas_id} in {channel}")
 
     total_domain_papers = sum(len(output.get("papers", [])) for output in domain_outputs.values())
     if total_domain_papers == 0:
